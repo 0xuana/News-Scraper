@@ -1,0 +1,2 @@
+"""Aigupiao API integration."""
+

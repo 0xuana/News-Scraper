@@ -1,0 +1,49 @@
+x-collector-environment: &collector-environment
+  DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-news}
+  AIGUPIAO_BASE_URL: ${AIGUPIAO_BASE_URL:-https://apis.aigupiao.com/Express/express_list/}
+  AIGUPIAO_REQUEST_INTERVAL: ${AIGUPIAO_REQUEST_INTERVAL:-3}
+  LIVE_INTERVAL: ${LIVE_INTERVAL:-45}
+  HTTP_TIMEOUT: ${HTTP_TIMEOUT:-15}
+  MAX_RETRIES: ${MAX_RETRIES:-5}
+  MAX_BACKOFF: ${MAX_BACKOFF:-60}
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-news}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  init-db:
+    build:
+      context: .
+    environment: *collector-environment
+    command: ["init-db"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  collector:
+    build:
+      context: .
+    environment: *collector-environment
+    command: ["live"]
+    depends_on:
+      init-db:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
