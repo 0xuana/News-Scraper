@@ -1,55 +1,67 @@
-# Aigupiao News Collector
+# 爱股票新闻采集器
 
-A modular Python service that collects Aigupiao news, removes unnecessary comment/user data,
-and stores idempotent records and stock/theme relationships in PostgreSQL.
+[简体中文](README.md) | [English](README.en.md)
 
-## Setup
+一个模块化的 Python 新闻采集服务，用于持续采集爱股票新闻，并将去重后的新闻及其股票、题材和话题关系存储到 PostgreSQL。
 
-Requires Python 3.11+ and PostgreSQL.
+## 主要功能
+
+- 按 `rec_time` 游标回溯历史新闻，支持检查点恢复。
+- 持续轮询最新新闻，通过新闻 ID 实现幂等入库。
+- 从 `web_content` 读取正文，并从开头的 `【…】` 中提取标题。
+- 保留去除空值后的原始 JSON，包括原始内容字段。
+- 处理超时、限流、服务端错误和 JSON 解析错误。
+- 支持 Docker Compose 一键启动 PostgreSQL、初始化数据库并运行实时采集。
+
+## 环境要求
+
+- Python 3.11 或更高版本
+- PostgreSQL
+- 可选：Docker 和 Docker Compose
+
+## 安装方案
+
+### 方案一：使用 requirements.txt
+
+适合直接运行采集器：
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 cp .env.example .env
-.venv/bin/python -m collector init-db
+python -m collector init-db
 ```
 
-Set `DATABASE_URL` in `.env` before initializing the schema.
+Windows PowerShell 的虚拟环境激活命令：
 
-## Run
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+### 方案二：开发环境
+
+`requirements-dev.txt` 在运行依赖之外包含 pytest 和 Ruff：
 
 ```bash
-.venv/bin/python -m collector backfill
-.venv/bin/python -m collector backfill --before 1789617870
-.venv/bin/python -m collector live
-.venv/bin/python -m collector final-refresh
-.venv/bin/python -m collector probe --date 2020-01-01
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
+python -m pip install -e .
+cp .env.example .env
 ```
 
-Backfill resumes from `crawler_state`; its news writes and cursor update share one transaction.
-Live mode always requests the newest page and relies on the news primary key for idempotency.
-
-Run `final-refresh` daily (for example, from cron or a systemd timer). It walks backward from
-the newest page through the one-calendar-month boundary, refreshes engagement and metadata,
-then sets `finalized_at` on due rows. Finalized rows and their relationships are immutable.
-
-Structured metadata includes themes, theme quotes, concepts, topics, stock/plate quotes, stock
-codes, and view/support/oppose/share/comment counters. The API's 24-hour-hot fields are stored
-separately; they are not presented as a verified news-pinning flag.
-
-## Verify
+也可以直接通过项目元数据安装开发依赖：
 
 ```bash
-.venv/bin/ruff check .
-.venv/bin/pytest
+python -m pip install -e '.[dev]'
 ```
 
-Tests use mocks and local JSON fixtures; they never call the production API.
+`requirements.txt` 和 `requirements-dev.txt` 与 `pyproject.toml` 中的依赖范围保持一致。修改项目依赖时，请同步更新这些文件。
 
-## Docker
-
-Copy the example environment file and change the PostgreSQL password before using the
-configuration outside local development:
+### 方案三：Docker Compose
 
 ```bash
 cp .env.example .env
@@ -57,12 +69,39 @@ docker compose up --build -d
 docker compose logs -f collector
 ```
 
-The default stack starts PostgreSQL, waits for it to become healthy, initializes the schema,
-and then runs the live collector. PostgreSQL data is retained in the `postgres-data` named
-volume. `DATABASE_URL` from `.env` is intended for commands run on the host; Compose replaces
-it with the internal `db` hostname for containers.
+默认编排会启动 PostgreSQL，等待健康检查通过，初始化表结构，然后启动实时采集器。数据保存在 `postgres-data` 命名卷中。
 
-Run other collector modes as one-shot containers:
+## 配置
+
+初始化数据库前，请检查 `.env` 中的配置：
+
+| 变量 | 用途 | 默认值 |
+| --- | --- | --- |
+| `DATABASE_URL` | PostgreSQL 连接字符串 | 无，非 `probe` 命令必填 |
+| `AIGUPIAO_BASE_URL` | 爱股票 API 地址 | 项目内置地址 |
+| `AIGUPIAO_REQUEST_INTERVAL` | 回溯和最终刷新的请求间隔 | `3` 秒 |
+| `LIVE_INTERVAL` | 实时采集轮询间隔 | `45` 秒 |
+| `HTTP_TIMEOUT` | HTTP 请求超时 | `15` 秒 |
+| `MAX_RETRIES` | 临时错误最大重试次数 | `5` |
+| `MAX_BACKOFF` | 指数退避最大等待时间 | `60` 秒 |
+
+Docker Compose 会在容器内使用 `db` 作为数据库主机名，并覆盖主机环境中的 `DATABASE_URL`。
+
+## 运行
+
+```bash
+python -m collector backfill
+python -m collector backfill --before 1789617870
+python -m collector live
+python -m collector final-refresh
+python -m collector probe --date 2020-01-01
+```
+
+`backfill` 会从 `crawler_state` 恢复进度，每批新闻和检查点在同一事务中写入。`live` 始终请求最新页，并依靠新闻表主键去重。
+
+建议每日运行一次 `final-refresh`，例如通过 cron 或 systemd timer。
+
+Docker 环境下可以使用一次性容器运行这些命令：
 
 ```bash
 docker compose run --rm collector backfill
@@ -71,10 +110,23 @@ docker compose run --rm collector final-refresh
 docker compose run --rm collector probe --date 2020-01-01
 ```
 
-Stop the services without deleting database data:
+## 验证
+
+```bash
+ruff check collector tests
+pytest
+```
+
+测试使用 mock 和本地 JSON 样本，不会请求生产 API。
+
+## 停止 Docker 服务
 
 ```bash
 docker compose down
 ```
 
-To intentionally delete the PostgreSQL volume as well, use `docker compose down --volumes`.
+上述命令会保留数据库卷。只有确定需要删除 PostgreSQL 数据时，才使用 `docker compose down --volumes`。
+
+## 开源许可证
+
+本项目使用 [Apache License 2.0](LICENSE)。
