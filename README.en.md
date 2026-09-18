@@ -224,6 +224,27 @@ overlap, and automatic final-refresh cadence are configured with `INITIAL_BACKFI
 volume. `DATABASE_URL` from `.env` is intended for commands run on the host; Compose replaces
 it with the internal `db` hostname for containers.
 
+Docker fully supports `scheduled`; it is the default command of the `news-collector` service in
+`compose.yaml`. Common operations are:
+
+```bash
+# Recommended deployment: start PostgreSQL, initialization, and scheduled in the background
+docker compose up --build -d
+
+# Check service state and follow scheduled logs
+docker compose ps
+docker compose logs -f news-collector
+
+# Restart from the persisted database checkpoints after a change or failure
+docker compose restart news-collector
+
+# Foreground debugging only; scheduled runs until Ctrl+C
+docker compose run --rm news-collector scheduled
+```
+
+Use `docker compose up -d` for the managed long-running service. The final `run --rm` form is useful
+only for explicit verification or temporary debugging and does not replace the service restart policy.
+
 Run other collector modes as one-shot containers:
 
 ```bash
@@ -232,6 +253,9 @@ docker compose run --rm news-collector backfill --before 1789617870
 docker compose run --rm news-collector final-refresh
 docker compose run --rm news-collector probe --date 2020-01-01
 ```
+
+Because `scheduled` is long-running, start it with `docker compose up --build -d` as shown above
+rather than treating it as a one-shot command.
 
 Stop the services without deleting database data:
 

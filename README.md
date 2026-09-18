@@ -153,6 +153,25 @@ docker compose logs -f news-collector
 
 默认编排会启动 PostgreSQL，等待健康检查通过，初始化表结构，然后启动计划采集器。首次运行会分页回填最近 60 天；完成后每小时分页同步上次成功时间以来的新闻，并额外重叠 5 分钟以保护时间边界。它还会默认每 24 小时自动执行最终刷新。两类检查点均保存在 PostgreSQL 中，容器重启后不会重复执行完整的 60 天回填或尚未到期的最终刷新。数据保存在 `postgres-data` 命名卷中。
 
+Docker 环境完整支持 `scheduled`，而且 `compose.yaml` 中 `news-collector` 服务的默认命令就是 `scheduled`。常用操作如下：
+
+```bash
+# 推荐：在后台启动 PostgreSQL、初始化任务和长期 scheduled 服务
+docker compose up --build -d
+
+# 确认服务状态并持续查看 scheduled 日志
+docker compose ps
+docker compose logs -f news-collector
+
+# 配置修改或异常退出后，使用同一数据库检查点重新启动
+docker compose restart news-collector
+
+# 仅用于前台调试；scheduled 会一直运行，按 Ctrl+C 停止
+docker compose run --rm news-collector scheduled
+```
+
+部署时应使用 `docker compose up -d` 管理长期服务；最后一条 `run --rm` 命令只是显式验证或临时调试 `scheduled`，不会替代 Compose 服务的重启策略。
+
 </details>
 
 ## 配置
@@ -231,6 +250,8 @@ docker compose run --rm news-collector backfill --before 1789617870
 docker compose run --rm news-collector final-refresh
 docker compose run --rm news-collector probe --date 2020-01-01
 ```
+
+`scheduled` 是长期任务，Docker 下的推荐启动方式是前文的 `docker compose up --build -d`，因此不把它归入上述一次性命令。
 
 ## 验证
 
