@@ -9,6 +9,47 @@ and stores idempotent records and stock/theme relationships in PostgreSQL.
 
 Requires Python 3.11+ and PostgreSQL.
 
+### uv workflow (recommended for local testing)
+
+The committed `uv.lock` lets `uv` create `.venv` and install locked dependencies. Install
+`uv` by following the [official installation guide](https://docs.astral.sh/uv/getting-started/installation/),
+then synchronize the project with its test tools:
+
+```bash
+uv sync --extra dev
+```
+
+Run the offline unit tests and lint checks without activating the virtual environment:
+
+```bash
+uv run pytest
+uv run ruff check collector tests
+```
+
+Probe one real API page without writing to PostgreSQL:
+
+```bash
+uv run python -m collector probe --date 2026-09-17
+```
+
+To test database persistence, copy and configure the environment file, start PostgreSQL, and
+run the initialization and backfill commands:
+
+```bash
+cp .env.example .env
+uv run python -m collector init-db
+uv run python -m collector backfill
+```
+
+Press `Ctrl+C` to stop backfill. A later invocation resumes from the stored checkpoint. Run the
+live collector with:
+
+```bash
+uv run python -m collector live
+```
+
+### pip workflow
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate

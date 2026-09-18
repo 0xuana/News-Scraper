@@ -21,7 +21,56 @@
 
 ## 安装方案
 
-### 方案一：使用 requirements.txt
+### 方案一：使用 uv（推荐用于本地测试）
+
+项目已提供 `uv.lock`，`uv` 会自动创建 `.venv` 并安装锁定版本的依赖。如果还没有安装 `uv`，Linux 和 macOS 可使用：
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Windows PowerShell：
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+安装项目和开发测试依赖：
+
+```bash
+uv sync --extra dev
+```
+
+运行不访问生产 API、也不需要 PostgreSQL 的本地测试：
+
+```bash
+uv run pytest
+uv run ruff check collector tests
+```
+
+只请求一页真实 API 数据且不写入数据库：
+
+```bash
+uv run python -m collector probe --date 2026-09-17
+```
+
+如果要测试完整入库流程，先复制并配置 `.env`，确保 PostgreSQL 已启动：
+
+```bash
+cp .env.example .env
+uv run python -m collector init-db
+uv run python -m collector backfill
+```
+
+按 `Ctrl+C` 即可停止回溯。再次执行同一命令时，程序会从数据库检查点继续。启动实时采集可执行：
+
+```bash
+uv run python -m collector live
+```
+
+详细安装方式可查看 [uv 官方安装文档](https://docs.astral.sh/uv/getting-started/installation/)。
+
+### 方案二：使用 requirements.txt
 
 适合直接运行采集器：
 
@@ -40,7 +89,7 @@ Windows PowerShell 的虚拟环境激活命令：
 .venv\Scripts\Activate.ps1
 ```
 
-### 方案二：开发环境
+### 方案三：pip 开发环境
 
 `requirements-dev.txt` 在运行依赖之外包含 pytest 和 Ruff：
 
@@ -61,7 +110,7 @@ python -m pip install -e '.[dev]'
 
 `requirements.txt` 和 `requirements-dev.txt` 与 `pyproject.toml` 中的依赖范围保持一致。修改项目依赖时，请同步更新这些文件。
 
-### 方案三：Docker Compose
+### 方案四：Docker Compose
 
 ```bash
 cp .env.example .env
