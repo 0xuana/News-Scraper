@@ -24,6 +24,13 @@ def _non_negative_int(name: str, default: int) -> int:
     return value
 
 
+def _positive_int(name: str, default: int) -> int:
+    value = int(os.getenv(name, default))
+    if value <= 0:
+        raise ValueError(f"{name} must be greater than zero")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     database_url: str
@@ -33,6 +40,9 @@ class Settings:
     http_timeout: float = 15.0
     max_retries: int = 5
     max_backoff: float = 60.0
+    initial_backfill_days: int = 60
+    sync_interval: float = 3600.0
+    sync_overlap_seconds: int = 300
 
     @classmethod
     def from_env(cls, *, require_database: bool = True) -> Settings:
@@ -48,4 +58,7 @@ class Settings:
             http_timeout=_positive_float("HTTP_TIMEOUT", 15.0),
             max_retries=_non_negative_int("MAX_RETRIES", 5),
             max_backoff=_positive_float("MAX_BACKOFF", 60.0),
+            initial_backfill_days=_positive_int("INITIAL_BACKFILL_DAYS", 60),
+            sync_interval=_positive_float("SYNC_INTERVAL", 3600.0),
+            sync_overlap_seconds=_non_negative_int("SYNC_OVERLAP_SECONDS", 300),
         )

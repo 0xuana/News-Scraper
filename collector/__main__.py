@@ -12,6 +12,7 @@ from collector.aigupiao.parser import parse_payload
 from collector.collectors.backfill import run_backfill
 from collector.collectors.final_refresh import run_final_refresh
 from collector.collectors.live import run_live
+from collector.collectors.scheduled import run_scheduled
 from collector.config import Settings
 from collector.db.repository import NewsRepository
 from collector.utils.logging import configure_logging
@@ -23,6 +24,10 @@ def _parser() -> argparse.ArgumentParser:
     backfill = subparsers.add_parser("backfill", help="resume historical collection")
     backfill.add_argument("--before", type=int, help="override the stored starting cursor")
     subparsers.add_parser("live", help="poll current news continuously")
+    subparsers.add_parser(
+        "scheduled",
+        help="backfill a bounded history window, then synchronize periodically",
+    )
     subparsers.add_parser(
         "final-refresh", help="refresh one-month-old news and freeze it for long-term storage"
     )
@@ -63,6 +68,16 @@ def main() -> int:
         elif args.command == "live":
             repository = NewsRepository(settings.database_url)
             run_live(client, repository, interval=settings.live_interval)
+        elif args.command == "scheduled":
+            repository = NewsRepository(settings.database_url)
+            run_scheduled(
+                client,
+                repository,
+                initial_backfill_days=settings.initial_backfill_days,
+                sync_interval=settings.sync_interval,
+                overlap_seconds=settings.sync_overlap_seconds,
+                request_interval=settings.request_interval,
+            )
         elif args.command == "final-refresh":
             repository = NewsRepository(settings.database_url)
             run_final_refresh(client, repository, interval=settings.request_interval)
