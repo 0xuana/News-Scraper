@@ -2,14 +2,46 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
-A modular Python service that collects Aigupiao news, removes unnecessary comment/user data,
-and stores idempotent records and stock/theme relationships in PostgreSQL.
+A long-running Python collector that paginates through the Aigupiao news feed, parses article,
+stock, theme, and topic data, and stores it idempotently in PostgreSQL. The default Docker
+workflow backfills the latest 60 days once, then performs an hourly paginated synchronization
+with a persisted checkpoint and a protective time overlap.
+
+## Collection behavior
+
+- Historical and incremental requests paginate by `rec_time`, so collection is not limited to
+  the newest 20-item response.
+- News and its relationships use idempotent UPSERTs, making overlap and retries safe.
+- A checkpoint advances only after the entire target window succeeds. A failed cycle is retried
+  after restart instead of being incorrectly marked complete.
+- Timeouts, rate limits, server failures, malformed JSON, and non-advancing cursors are handled
+  explicitly.
+
+### Scheduled synchronization boundaries
+
+`scheduled` is the default Docker mode:
+
+- **Initial cycle:** pages backward until the oldest item reaches
+  `current time - INITIAL_BACKFILL_DAYS`, or until the server returns an empty page. Items older
+  than the boundary on the final page are not stored.
+- **Later cycles:** page backward until the oldest item reaches
+  `last successful checkpoint - SYNC_OVERLAP_SECONDS`, or until an empty page is returned.
+- **Failure:** exhausted HTTP retries, parsing/database failures, or a cursor that no longer moves
+  backward terminate the process without advancing the checkpoint. Docker can then restart it.
+- **Lifecycle:** after a successful cycle, the process sleeps for `SYNC_INTERVAL` seconds and
+  repeats indefinitely.
+
+The default five-minute overlap protects news published at the same boundary second, records
+that become visible late, and feeds that change around pagination time. Duplicate reads are
+absorbed by the news-ID UPSERT, trading a small amount of repeated work for a safer boundary.
 
 ## Setup
 
 Requires Python 3.11+ and PostgreSQL.
 
-### uv workflow (recommended for local testing)
+<details open>
+<summary><strong>Option 1: uv (recommended for local testing)</strong></summary>
+
 
 The committed `uv.lock` lets `uv` create `.venv` and install locked dependencies. Install
 `uv` by following the [official installation guide](https://docs.astral.sh/uv/getting-started/installation/),
@@ -48,7 +80,11 @@ live collector with:
 uv run python -m collector live
 ```
 
-### pip workflow
+</details>
+
+<details>
+<summary><strong>Option 2: requirements.txt</strong></summary>
+
 
 ```bash
 python3 -m venv .venv
@@ -61,12 +97,57 @@ python -m collector init-db
 
 Set `DATABASE_URL` in `.env` before initializing the schema.
 
+</details>
+
+<details>
+<summary><strong>Option 3: editable development installation</strong></summary>
+
 For development, install `requirements-dev.txt` and the project in editable mode:
 
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m pip install -e .
 ```
+
+</details>
+
+## Configuration
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `DATABASE_URL` | PostgreSQL connection string | Required except for `probe` |
+| `AIGUPIAO_BASE_URL` | Aigupiao feed URL | Built in |
+| `AIGUPIAO_REQUEST_INTERVAL` | Delay between paginated requests | `3` seconds |
+| `LIVE_INTERVAL` | Delay between `live` requests | `45` seconds |
+| `INITIAL_BACKFILL_DAYS` | Initial scheduled history window | `60` days |
+| `SYNC_INTERVAL` | Delay after each scheduled cycle | `3600` seconds |
+| `SYNC_OVERLAP_SECONDS` | Backward overlap for incremental cycles | `300` seconds |
+| `HTTP_TIMEOUT` | HTTP request timeout | `15` seconds |
+| `MAX_RETRIES` | Retries for temporary request failures | `5` |
+| `MAX_BACKOFF` | Maximum exponential-backoff delay | `60` seconds |
+
+Copy `.env.example` and adjust it, for example:
+
+```dotenv
+DATABASE_URL=postgresql://postgres:change-me@localhost:5432/news
+POSTGRES_DB=news
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=change-me
+POSTGRES_PORT=5432
+
+AIGUPIAO_BASE_URL=https://apis.aigupiao.com/Express/express_list/
+AIGUPIAO_REQUEST_INTERVAL=3
+LIVE_INTERVAL=45
+INITIAL_BACKFILL_DAYS=60
+SYNC_INTERVAL=3600
+SYNC_OVERLAP_SECONDS=300
+HTTP_TIMEOUT=15
+MAX_RETRIES=5
+MAX_BACKOFF=60
+```
+
+URL-encode passwords containing characters such as `@`, `:`, or `/` inside `DATABASE_URL`, and
+replace the example password in production.
 
 ## Run
 
@@ -100,6 +181,9 @@ Tests use mocks and local JSON fixtures; they never call the production API.
 
 ## Docker
 
+<details>
+<summary><strong>Option 4: Docker Compose (recommended for deployment)</strong></summary>
+
 Copy the example environment file and change the PostgreSQL password before using the
 configuration outside local development:
 
@@ -132,6 +216,8 @@ docker compose down
 ```
 
 To intentionally delete the PostgreSQL volume as well, use `docker compose down --volumes`.
+
+</details>
 
 ## License
 

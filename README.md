@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
-一个模块化的 Python 新闻采集服务，用于持续采集爱股票新闻，并将去重后的新闻及其股票、题材和话题关系存储到 PostgreSQL。
+一个面向长期运行的 Python 新闻采集服务。它从爱股票快讯接口分页获取新闻，解析正文、标题、股票、题材和话题关系，并通过 PostgreSQL UPSERT 幂等保存。默认 Docker 工作流首次回填最近 60 天，之后每小时执行一次带时间重叠的增量同步；同步检查点持久化在数据库中，因此网络失败或容器重启不会让已完成的历史回填从头开始。
 
 ## 主要功能
 
@@ -11,7 +11,21 @@
 - 从 `web_content` 读取正文，并从开头的 `【…】` 中提取标题。
 - 保留去除空值后的原始 JSON，包括原始内容字段。
 - 处理超时、限流、服务端错误和 JSON 解析错误。
-- 支持 Docker Compose 一键启动 PostgreSQL、初始化数据库并运行实时采集。
+- 支持有边界的首次历史回填，以及不会因单页 20 条限制而漏数的分页增量同步。
+- 只有整轮同步成功后才推进检查点；失败轮次会在重启后安全重试。
+- 支持 Docker Compose 一键启动 PostgreSQL、初始化数据库并运行计划采集。
+
+## 计划同步语义
+
+`scheduled` 是 Docker 的默认运行模式：
+
+- **首次运行**：从最新页向历史翻页。当页面最旧新闻时间到达 `当前时间 - INITIAL_BACKFILL_DAYS`，或者 API 返回空页时，本轮结束。跨越边界的页面只保存边界以内的数据。
+- **后续运行**：从最新页向历史翻页。当页面最旧新闻时间到达 `上次成功检查点 - SYNC_OVERLAP_SECONDS`，或者 API 返回空页时，本轮结束。
+- **成功条件**：只有全部目标页面解析并写入成功后，才把本轮开始时间保存为新检查点。
+- **异常条件**：HTTP 重试耗尽、解析失败、数据库写入失败或分页游标不再向过去移动时，进程退出且不推进检查点；Docker 会按重启策略重新运行。
+- **进程生命周期**：单轮同步结束后休眠 `SYNC_INTERVAL` 秒再执行下一轮；整个进程不会因为完成一次同步而退出。
+
+时间重叠窗口默认是 5 分钟。它可以覆盖同一秒发布的边界新闻、接口短暂延迟可见的数据，以及同步时刻附近的分页变化。重叠数据通过新闻 ID 的 UPSERT 去重，因此用少量重复读取换取更可靠的边界完整性。
 
 ## 环境要求
 
@@ -21,7 +35,9 @@
 
 ## 安装方案
 
-### 方案一：使用 uv（推荐用于本地测试）
+<details open>
+<summary><strong>方案一：使用 uv（推荐用于本地测试）</strong></summary>
+
 
 项目已提供 `uv.lock`，`uv` 会自动创建 `.venv` 并安装锁定版本的依赖。如果还没有安装 `uv`，Linux 和 macOS 可使用：
 
@@ -70,7 +86,11 @@ uv run python -m collector live
 
 详细安装方式可查看 [uv 官方安装文档](https://docs.astral.sh/uv/getting-started/installation/)。
 
-### 方案二：使用 requirements.txt
+</details>
+
+<details>
+<summary><strong>方案二：使用 requirements.txt</strong></summary>
+
 
 适合直接运行采集器：
 
@@ -89,7 +109,11 @@ Windows PowerShell 的虚拟环境激活命令：
 .venv\Scripts\Activate.ps1
 ```
 
-### 方案三：pip 开发环境
+</details>
+
+<details>
+<summary><strong>方案三：pip 开发环境</strong></summary>
+
 
 `requirements-dev.txt` 在运行依赖之外包含 pytest 和 Ruff：
 
@@ -110,7 +134,11 @@ python -m pip install -e '.[dev]'
 
 `requirements.txt` 和 `requirements-dev.txt` 与 `pyproject.toml` 中的依赖范围保持一致。修改项目依赖时，请同步更新这些文件。
 
-### 方案四：Docker Compose
+</details>
+
+<details>
+<summary><strong>方案四：Docker Compose（推荐用于部署）</strong></summary>
+
 
 ```bash
 cp .env.example .env
@@ -119,6 +147,8 @@ docker compose logs -f news-collector
 ```
 
 默认编排会启动 PostgreSQL，等待健康检查通过，初始化表结构，然后启动计划采集器。首次运行会分页回填最近 60 天；完成后每小时分页同步上次成功时间以来的新闻，并额外重叠 5 分钟以保护时间边界。同步检查点保存在 PostgreSQL 中，容器重启后不会重复执行完整的 60 天回填。数据保存在 `postgres-data` 命名卷中。
+
+</details>
 
 ## 配置
 
@@ -136,6 +166,28 @@ docker compose logs -f news-collector
 | `HTTP_TIMEOUT` | HTTP 请求超时 | `15` 秒 |
 | `MAX_RETRIES` | 临时错误最大重试次数 | `5` |
 | `MAX_BACKOFF` | 指数退避最大等待时间 | `60` 秒 |
+
+可复制 `.env.example` 后按需修改，例如：
+
+```dotenv
+DATABASE_URL=postgresql://postgres:change-me@localhost:5432/news
+POSTGRES_DB=news
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=change-me
+POSTGRES_PORT=5432
+
+AIGUPIAO_BASE_URL=https://apis.aigupiao.com/Express/express_list/
+AIGUPIAO_REQUEST_INTERVAL=3
+LIVE_INTERVAL=45
+INITIAL_BACKFILL_DAYS=60
+SYNC_INTERVAL=3600
+SYNC_OVERLAP_SECONDS=300
+HTTP_TIMEOUT=15
+MAX_RETRIES=5
+MAX_BACKOFF=60
+```
+
+如果密码包含 `@`、`:`、`/` 等字符，`DATABASE_URL` 中的密码需要进行 URL 编码。生产环境请替换示例密码。
 
 Docker Compose 会在容器内使用 `db` 作为数据库主机名，并覆盖主机环境中的 `DATABASE_URL`。
 
