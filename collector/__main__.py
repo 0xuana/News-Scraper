@@ -19,21 +19,75 @@ from collector.utils.logging import configure_logging
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Collect Aigupiao news into PostgreSQL")
+    parser = argparse.ArgumentParser(
+        description="Collect Aigupiao news into PostgreSQL.",
+        epilog=(
+            "Collection timing, retry behavior, and scheduled windows are configured with "
+            "environment variables documented in README.md."
+        ),
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    backfill = subparsers.add_parser("backfill", help="resume historical collection")
-    backfill.add_argument("--before", type=int, help="override the stored starting cursor")
-    subparsers.add_parser("live", help="poll current news continuously")
+    backfill = subparsers.add_parser(
+        "backfill",
+        help="resume unbounded historical pagination",
+        description=(
+            "Page backward until the API returns no news, saving a page checkpoint after "
+            "each successful database transaction."
+        ),
+    )
+    backfill.add_argument(
+        "--before",
+        type=int,
+        metavar="UNIX_TIMESTAMP",
+        help=(
+            "start before this Unix timestamp instead of the saved backfill cursor; "
+            "0 starts at the newest page"
+        ),
+    )
+    subparsers.add_parser(
+        "live",
+        help="poll only the newest page continuously",
+        description=(
+            "Fetch before=0 repeatedly at LIVE_INTERVAL; this does not paginate and relies "
+            "on news-ID UPSERTs for deduplication."
+        ),
+    )
     subparsers.add_parser(
         "scheduled",
-        help="backfill a bounded history window, then synchronize periodically",
+        help="run bounded syncs and automatic final refreshes",
+        description=(
+            "Backfill INITIAL_BACKFILL_DAYS once, then synchronize from the last successful "
+            "cycle checkpoint with overlap every SYNC_INTERVAL. Also runs final-refresh when "
+            "FINAL_REFRESH_INTERVAL has elapsed."
+        ),
     )
     subparsers.add_parser(
-        "final-refresh", help="refresh one-month-old news and freeze it for long-term storage"
+        "final-refresh",
+        help="refresh one-month-old news and freeze it",
+        description=(
+            "Page from newest news through the one-calendar-month boundary, update mutable "
+            "fields, then mark all due rows immutable. Scheduled mode runs this automatically."
+        ),
     )
-    probe = subparsers.add_parser("probe", help="fetch one page near a date")
-    probe.add_argument("--date", required=True, help="date in YYYY-MM-DD format")
-    subparsers.add_parser("init-db", help="create the PostgreSQL tables")
+    probe = subparsers.add_parser(
+        "probe",
+        help="inspect one API page without database writes",
+        description=(
+            "Convert the start of an Asia/Shanghai calendar date to a Unix cursor, fetch one "
+            "page, and print its cursor and parsed item count as JSON."
+        ),
+    )
+    probe.add_argument(
+        "--date",
+        required=True,
+        metavar="YYYY-MM-DD",
+        help="Asia/Shanghai date whose 00:00 timestamp is sent as the API before cursor",
+    )
+    subparsers.add_parser(
+        "init-db",
+        help="create or update PostgreSQL tables",
+        description="Apply the idempotent bundled PostgreSQL schema and exit.",
+    )
     return parser
 
 
@@ -76,6 +130,7 @@ def main() -> int:
                 initial_backfill_days=settings.initial_backfill_days,
                 sync_interval=settings.sync_interval,
                 overlap_seconds=settings.sync_overlap_seconds,
+                final_refresh_interval=settings.final_refresh_interval,
                 request_interval=settings.request_interval,
             )
         elif args.command == "final-refresh":
