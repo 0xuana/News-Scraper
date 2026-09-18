@@ -115,7 +115,7 @@ python -m pip install -e '.[dev]'
 ```bash
 cp .env.example .env
 docker compose up --build -d
-docker compose logs -f collector
+docker compose logs -f news-collector
 ```
 
 默认编排会启动 PostgreSQL，等待健康检查通过，初始化表结构，然后启动计划采集器。首次运行会分页回填最近 60 天；完成后每小时分页同步上次成功时间以来的新闻，并额外重叠 5 分钟以保护时间边界。同步检查点保存在 PostgreSQL 中，容器重启后不会重复执行完整的 60 天回填。数据保存在 `postgres-data` 命名卷中。
@@ -157,10 +157,10 @@ python -m collector probe --date 2020-01-01
 Docker 环境下可以使用一次性容器运行这些命令：
 
 ```bash
-docker compose run --rm collector backfill
-docker compose run --rm collector backfill --before 1789617870
-docker compose run --rm collector final-refresh
-docker compose run --rm collector probe --date 2020-01-01
+docker compose run --rm news-collector backfill
+docker compose run --rm news-collector backfill --before 1789617870
+docker compose run --rm news-collector final-refresh
+docker compose run --rm news-collector probe --date 2020-01-01
 ```
 
 ## 验证

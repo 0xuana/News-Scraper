@@ -106,7 +106,7 @@ configuration outside local development:
 ```bash
 cp .env.example .env
 docker compose up --build -d
-docker compose logs -f collector
+docker compose logs -f news-collector
 ```
 
 The default stack starts PostgreSQL, waits for it to become healthy, initializes the schema,
@@ -119,10 +119,10 @@ it with the internal `db` hostname for containers.
 Run other collector modes as one-shot containers:
 
 ```bash
-docker compose run --rm collector backfill
-docker compose run --rm collector backfill --before 1789617870
-docker compose run --rm collector final-refresh
-docker compose run --rm collector probe --date 2020-01-01
+docker compose run --rm news-collector backfill
+docker compose run --rm news-collector backfill --before 1789617870
+docker compose run --rm news-collector final-refresh
+docker compose run --rm news-collector probe --date 2020-01-01
 ```
 
 Stop the services without deleting database data:

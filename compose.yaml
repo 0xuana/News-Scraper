@@ -38,7 +38,7 @@ services:
         condition: service_healthy
     restart: "no"
 
-  collector:
+  news-collector:
     build:
       context: .
     environment: *collector-environment
