@@ -7,6 +7,11 @@ stock, theme, and topic data, and stores it idempotently in PostgreSQL. The defa
 workflow backfills the latest 60 days once, then performs an hourly paginated synchronization
 with a persisted checkpoint and a protective time overlap.
 
+Use this project when you want to accumulate a long-term historical news corpus for a RAG
+knowledge base that strengthens an agent's retrieval, context, event tracking, and analysis.
+It supplies structured, deduplicated, restart-safe source data for downstream chunking, embedding,
+and retrieval; it does not itself provide a vector database or RAG query service.
+
 ## Collection behavior
 
 - Historical and incremental requests paginate by `rec_time`, so collection is not limited to
@@ -28,8 +33,17 @@ with a persisted checkpoint and a protective time overlap.
   `last successful checkpoint - SYNC_OVERLAP_SECONDS`, or until an empty page is returned.
 - **Failure:** exhausted HTTP retries, parsing/database failures, or a cursor that no longer moves
   backward terminate the process without advancing the checkpoint. Docker can then restart it.
-- **Lifecycle:** after a successful cycle, the process sleeps for `SYNC_INTERVAL` seconds and
-  repeats indefinitely.
+- **Final refresh:** after regular synchronization, scheduled mode automatically refreshes through
+  the one-calendar-month boundary when `FINAL_REFRESH_INTERVAL` has elapsed (daily by default),
+  then freezes due rows. No separate cron job is required.
+- **Lifecycle:** after regular synchronization and any due final refresh complete, the process
+  sleeps for `SYNC_INTERVAL` seconds and repeats indefinitely.
+
+The “last successful checkpoint” is the Unix timestamp captured at the **start** of the previous
+cycle and stored as `aigupiao_scheduled` in `crawler_state`. It is not a page cursor, the timestamp
+of the last stored article, or the cycle completion time. Starting from this timestamp covers news
+published while the prior cycle was running; the overlap adds boundary protection. Final refreshes
+use a separate `aigupiao_final_refresh` checkpoint. Neither checkpoint advances on partial failure.
 
 The default five-minute overlap protects news published at the same boundary second, records
 that become visible late, and feeds that change around pagination time. Duplicate reads are
@@ -122,6 +136,7 @@ python -m pip install -e .
 | `INITIAL_BACKFILL_DAYS` | Initial scheduled history window | `60` days |
 | `SYNC_INTERVAL` | Delay after each scheduled cycle | `3600` seconds |
 | `SYNC_OVERLAP_SECONDS` | Backward overlap for incremental cycles | `300` seconds |
+| `FINAL_REFRESH_INTERVAL` | Minimum interval between successful automatic final refreshes | `86400` seconds |
 | `HTTP_TIMEOUT` | HTTP request timeout | `15` seconds |
 | `MAX_RETRIES` | Retries for temporary request failures | `5` |
 | `MAX_BACKOFF` | Maximum exponential-backoff delay | `60` seconds |
@@ -141,6 +156,7 @@ LIVE_INTERVAL=45
 INITIAL_BACKFILL_DAYS=60
 SYNC_INTERVAL=3600
 SYNC_OVERLAP_SECONDS=300
+FINAL_REFRESH_INTERVAL=86400
 HTTP_TIMEOUT=15
 MAX_RETRIES=5
 MAX_BACKOFF=60
@@ -160,15 +176,19 @@ replace the example password in production.
 .venv/bin/python -m collector probe --date 2020-01-01
 ```
 
-Backfill resumes from `crawler_state`; its news writes and cursor update share one transaction.
-Live mode always requests the newest page and relies on the news primary key for idempotency.
-Scheduled mode initially paginates through the latest 60 days, then synchronizes every hour
-from the last successful checkpoint with a five-minute overlap. It advances the checkpoint
-only after a complete cycle, so container restarts safely resume incremental collection.
+| Command or argument | Meaning and behavior |
+| --- | --- |
+| `init-db` | Idempotently applies the bundled PostgreSQL schema and exits without collecting |
+| `backfill` | Resumes its per-page cursor and paginates indefinitely into history until an empty page |
+| `backfill --before UNIX_TIMESTAMP` | Ignores the saved backfill cursor for this run; `0` starts at the newest page |
+| `live` | Repeatedly fetches only `before=0`, without pagination, sleeping `LIVE_INTERVAL` between polls |
+| `scheduled` | Runs bounded checkpointed synchronization plus automatic checkpointed final refreshes indefinitely |
+| `final-refresh` | Forces a refresh through the one-month boundary now, freezes due rows, saves its checkpoint, and exits |
+| `probe --date YYYY-MM-DD` | Uses 00:00 on that date in Asia/Shanghai as the one-page cursor, prints JSON, and never opens the database |
 
-Run `final-refresh` daily (for example, from cron or a systemd timer). It walks backward from
-the newest page through the one-calendar-month boundary, refreshes engagement and metadata,
-then sets `finalized_at` on due rows. Finalized rows and their relationships are immutable.
+Use `python -m collector COMMAND --help` for the same command-specific details. Normally,
+`scheduled` is the only long-running process required; explicit `final-refresh` remains useful for
+an immediate maintenance run.
 
 ## Verify
 
@@ -195,8 +215,8 @@ docker compose logs -f news-collector
 
 The default stack starts PostgreSQL, waits for it to become healthy, initializes the schema,
 and then runs the scheduled collector. Its initial history window, synchronization interval,
-and overlap are configured with `INITIAL_BACKFILL_DAYS`, `SYNC_INTERVAL`, and
-`SYNC_OVERLAP_SECONDS`. PostgreSQL data is retained in the `postgres-data` named
+overlap, and automatic final-refresh cadence are configured with `INITIAL_BACKFILL_DAYS`,
+`SYNC_INTERVAL`, `SYNC_OVERLAP_SECONDS`, and `FINAL_REFRESH_INTERVAL`. PostgreSQL data is retained in the `postgres-data` named
 volume. `DATABASE_URL` from `.env` is intended for commands run on the host; Compose replaces
 it with the internal `db` hostname for containers.
 

@@ -4,6 +4,8 @@
 
 一个面向长期运行的 Python 新闻采集服务。它从爱股票快讯接口分页获取新闻，解析正文、标题、股票、题材和话题关系，并通过 PostgreSQL UPSERT 幂等保存。默认 Docker 工作流首次回填最近 60 天，之后每小时执行一次带时间重叠的增量同步；同步检查点持久化在数据库中，因此网络失败或容器重启不会让已完成的历史回填从头开始。
 
+当你希望长期积累历史新闻数据，并将其作为 RAG 知识库来增强 Agent 的历史检索、上下文补充、事件追踪和分析能力时，就会需要这个项目。它负责持续沉淀结构化、可去重且可恢复采集的新闻数据，为后续的分块、向量化和检索流程提供稳定数据源；项目本身不包含向量数据库或 RAG 查询服务。
+
 ## 主要功能
 
 - 按 `rec_time` 游标回溯历史新闻，支持检查点恢复。
@@ -23,7 +25,10 @@
 - **后续运行**：从最新页向历史翻页。当页面最旧新闻时间到达 `上次成功检查点 - SYNC_OVERLAP_SECONDS`，或者 API 返回空页时，本轮结束。
 - **成功条件**：只有全部目标页面解析并写入成功后，才把本轮开始时间保存为新检查点。
 - **异常条件**：HTTP 重试耗尽、解析失败、数据库写入失败或分页游标不再向过去移动时，进程退出且不推进检查点；Docker 会按重启策略重新运行。
-- **进程生命周期**：单轮同步结束后休眠 `SYNC_INTERVAL` 秒再执行下一轮；整个进程不会因为完成一次同步而退出。
+- **最终刷新**：常规同步成功后，如果从未成功执行最终刷新，或其独立检查点已过去 `FINAL_REFRESH_INTERVAL` 秒，便自动从最新页刷新到一个自然月前的边界，再冻结所有到期记录。默认每 24 小时执行一次，无需另配 cron。
+- **进程生命周期**：常规同步和本轮到期的最终刷新均结束后，休眠 `SYNC_INTERVAL` 秒再执行下一轮；整个进程不会因为完成一次同步而退出。
+
+这里的“上次成功检查点”是上一轮**开始时**由系统时钟取得的 Unix 秒时间，存储在 `crawler_state` 的 `aigupiao_scheduled` 记录中；它不是上一页游标、最后写入新闻的时间，也不是该轮结束时间。使用开始时间可以覆盖上一轮执行期间新发布的新闻，再减去重叠窗口以保护分页边界。最终刷新使用独立的 `aigupiao_final_refresh` 检查点，表示上一次“刷新到一个月边界并冻结到期记录”全部成功时对应的启动时间。任何中途失败都不会更新相应检查点。
 
 时间重叠窗口默认是 5 分钟。它可以覆盖同一秒发布的边界新闻、接口短暂延迟可见的数据，以及同步时刻附近的分页变化。重叠数据通过新闻 ID 的 UPSERT 去重，因此用少量重复读取换取更可靠的边界完整性。
 
@@ -146,7 +151,7 @@ docker compose up --build -d
 docker compose logs -f news-collector
 ```
 
-默认编排会启动 PostgreSQL，等待健康检查通过，初始化表结构，然后启动计划采集器。首次运行会分页回填最近 60 天；完成后每小时分页同步上次成功时间以来的新闻，并额外重叠 5 分钟以保护时间边界。同步检查点保存在 PostgreSQL 中，容器重启后不会重复执行完整的 60 天回填。数据保存在 `postgres-data` 命名卷中。
+默认编排会启动 PostgreSQL，等待健康检查通过，初始化表结构，然后启动计划采集器。首次运行会分页回填最近 60 天；完成后每小时分页同步上次成功时间以来的新闻，并额外重叠 5 分钟以保护时间边界。它还会默认每 24 小时自动执行最终刷新。两类检查点均保存在 PostgreSQL 中，容器重启后不会重复执行完整的 60 天回填或尚未到期的最终刷新。数据保存在 `postgres-data` 命名卷中。
 
 </details>
 
@@ -154,18 +159,19 @@ docker compose logs -f news-collector
 
 初始化数据库前，请检查 `.env` 中的配置：
 
-| 变量 | 用途 | 默认值 |
+| 变量 | 适用范围及具体行为 | 默认值 |
 | --- | --- | --- |
-| `DATABASE_URL` | PostgreSQL 连接字符串 | 无，非 `probe` 命令必填 |
-| `AIGUPIAO_BASE_URL` | 爱股票 API 地址 | 项目内置地址 |
-| `AIGUPIAO_REQUEST_INTERVAL` | 回溯和最终刷新的请求间隔 | `3` 秒 |
-| `LIVE_INTERVAL` | 实时采集轮询间隔 | `45` 秒 |
-| `INITIAL_BACKFILL_DAYS` | 计划模式首次回填天数 | `60` 天 |
-| `SYNC_INTERVAL` | 计划模式同步间隔 | `3600` 秒 |
-| `SYNC_OVERLAP_SECONDS` | 每轮同步向前重叠的保护窗口 | `300` 秒 |
-| `HTTP_TIMEOUT` | HTTP 请求超时 | `15` 秒 |
-| `MAX_RETRIES` | 临时错误最大重试次数 | `5` |
-| `MAX_BACKOFF` | 指数退避最大等待时间 | `60` 秒 |
+| `DATABASE_URL` | `init-db` 及所有写库采集命令使用的 PostgreSQL 连接字符串；只有 `probe` 不需要 | 无，必填 |
+| `AIGUPIAO_BASE_URL` | 所有联网命令请求的爱股票 API 端点 | 项目内置地址 |
+| `AIGUPIAO_REQUEST_INTERVAL` | `backfill`、`scheduled` 分页及 `final-refresh` 相邻请求之间的休眠秒数；必须大于 0 | `3` |
+| `LIVE_INTERVAL` | `live` 每次请求最新页后的休眠秒数；必须大于 0 | `45` |
+| `INITIAL_BACKFILL_DAYS` | `scheduled` 没有同步检查点时，从本轮开始时间向前保存的自然秒数窗口；必须为正整数 | `60` 天 |
+| `SYNC_INTERVAL` | `scheduled` 完成常规同步及到期最终刷新后，到下一轮开始前的休眠秒数；必须大于 0 | `3600` |
+| `SYNC_OVERLAP_SECONDS` | `scheduled` 后续轮次在上次成功检查点之前额外回溯的秒数；可为 `0` | `300` |
+| `FINAL_REFRESH_INTERVAL` | `scheduled` 两次成功自动最终刷新之间至少间隔的秒数；重启后仍由独立数据库检查点判断；必须大于 0 | `86400` |
+| `HTTP_TIMEOUT` | 单次 HTTP 请求超时秒数；必须大于 0 | `15` |
+| `MAX_RETRIES` | 首次请求失败后，对临时 HTTP/网络错误追加重试的最多次数；可为 `0` | `5` |
+| `MAX_BACKOFF` | 指数退避及 `Retry-After` 等待的秒数上限；必须大于 0 | `60` |
 
 可复制 `.env.example` 后按需修改，例如：
 
@@ -182,6 +188,7 @@ LIVE_INTERVAL=45
 INITIAL_BACKFILL_DAYS=60
 SYNC_INTERVAL=3600
 SYNC_OVERLAP_SECONDS=300
+FINAL_REFRESH_INTERVAL=86400
 HTTP_TIMEOUT=15
 MAX_RETRIES=5
 MAX_BACKOFF=60
@@ -202,9 +209,17 @@ python -m collector final-refresh
 python -m collector probe --date 2020-01-01
 ```
 
-`backfill` 会从 `crawler_state` 恢复进度，每批新闻和检查点在同一事务中写入。`live` 始终请求最新页，并依靠新闻表主键去重。`scheduled` 首次回填配置的历史窗口，之后按同步间隔分页覆盖上次成功时间以来的数据；只有整轮成功后才推进检查点。
+| 命令或参数 | 含义和行为 |
+| --- | --- |
+| `init-db` | 幂等应用内置 PostgreSQL schema 后退出，不采集新闻 |
+| `backfill` | 从专用逐页检查点恢复并一直向历史翻页；每一页新闻和下一页游标在同一事务中保存，空页时退出 |
+| `backfill --before UNIX_TIMESTAMP` | 忽略已存 backfill 检查点，从指定 Unix 秒游标开始；传 `0` 表示从最新页开始。该覆盖值本身不会先写入数据库 |
+| `live` | 始终以 `before=0` 获取最新一页，不向历史翻页；每次等待 `LIVE_INTERVAL` 后重复，依靠新闻 ID UPSERT 去重 |
+| `scheduled` | 首次回填有界窗口，之后从上次成功轮次开始时间减去重叠量进行同步，并按独立周期自动执行 `final-refresh`；长期运行不主动退出 |
+| `final-refresh` | 立即强制执行一次最终刷新，不理会自动刷新是否到期；更新一个自然月边界内的数据，冻结到期记录并保存独立检查点后退出 |
+| `probe --date YYYY-MM-DD` | 将上海时区该日 `00:00` 转成 `before` 游标，只请求并解析一页，以 JSON 输出游标和条数；不连接或写入数据库 |
 
-建议每日运行一次 `final-refresh`，例如通过 cron 或 systemd timer。
+各子命令也可用 `python -m collector COMMAND --help` 查看上述行为和参数。通常只需长期运行 `scheduled`；手动 `final-refresh` 保留给立即刷新、排障或维护场景。
 
 Docker 环境下可以使用一次性容器运行这些命令：
 
