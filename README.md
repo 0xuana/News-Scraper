@@ -245,6 +245,7 @@ python -m news_collector probe --date 2020-01-01
 Docker 环境下可以使用一次性容器运行这些命令：
 
 ```bash
+docker compose run --rm news-collector scheduled
 docker compose run --rm news-collector backfill
 docker compose run --rm news-collector backfill --before 1789617870
 docker compose run --rm news-collector final-refresh

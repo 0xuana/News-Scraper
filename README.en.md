@@ -248,6 +248,7 @@ only for explicit verification or temporary debugging and does not replace the s
 Run other collector modes as one-shot containers:
 
 ```bash
+docker compose run --rm news-collector scheduled
 docker compose run --rm news-collector backfill
 docker compose run --rm news-collector backfill --before 1789617870
 docker compose run --rm news-collector final-refresh
