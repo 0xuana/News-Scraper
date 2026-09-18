@@ -66,27 +66,27 @@ uv sync --extra dev
 
 ```bash
 uv run pytest
-uv run ruff check collector tests
+uv run ruff check news_collector tests
 ```
 
 只请求一页真实 API 数据且不写入数据库：
 
 ```bash
-uv run python -m collector probe --date 2026-09-17
+uv run python -m news_collector probe --date 2026-09-17
 ```
 
 如果要测试完整入库流程，先复制并配置 `.env`，确保 PostgreSQL 已启动：
 
 ```bash
 cp .env.example .env
-uv run python -m collector init-db
-uv run python -m collector backfill
+uv run python -m news_collector init-db
+uv run python -m news_collector backfill
 ```
 
 按 `Ctrl+C` 即可停止回溯。再次执行同一命令时，程序会从数据库检查点继续。启动实时采集可执行：
 
 ```bash
-uv run python -m collector live
+uv run python -m news_collector live
 ```
 
 详细安装方式可查看 [uv 官方安装文档](https://docs.astral.sh/uv/getting-started/installation/)。
@@ -105,7 +105,7 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 cp .env.example .env
-python -m collector init-db
+python -m news_collector init-db
 ```
 
 Windows PowerShell 的虚拟环境激活命令：
@@ -200,13 +200,15 @@ Docker Compose 会在容器内使用 `db` 作为数据库主机名，并覆盖�
 
 ## 运行
 
+Python 包目录和模块名统一为 `news_collector`，因此源码环境使用 `python -m news_collector`。安装项目后也可以使用等价的命令行入口 `news-collector`，例如 `news-collector scheduled`。
+
 ```bash
-python -m collector backfill
-python -m collector backfill --before 1789617870
-python -m collector live
-python -m collector scheduled
-python -m collector final-refresh
-python -m collector probe --date 2020-01-01
+python -m news_collector backfill
+python -m news_collector backfill --before 1789617870
+python -m news_collector live
+python -m news_collector scheduled
+python -m news_collector final-refresh
+python -m news_collector probe --date 2020-01-01
 ```
 
 | 命令或参数 | 含义和行为 |
@@ -219,7 +221,7 @@ python -m collector probe --date 2020-01-01
 | `final-refresh` | 立即强制执行一次最终刷新，不理会自动刷新是否到期；更新一个自然月边界内的数据，冻结到期记录并保存独立检查点后退出 |
 | `probe --date YYYY-MM-DD` | 将上海时区该日 `00:00` 转成 `before` 游标，只请求并解析一页，以 JSON 输出游标和条数；不连接或写入数据库 |
 
-各子命令也可用 `python -m collector COMMAND --help` 查看上述行为和参数。通常只需长期运行 `scheduled`；手动 `final-refresh` 保留给立即刷新、排障或维护场景。
+各子命令也可用 `python -m news_collector COMMAND --help` 查看上述行为和参数。通常只需长期运行 `scheduled`；手动 `final-refresh` 保留给立即刷新、排障或维护场景。
 
 Docker 环境下可以使用一次性容器运行这些命令：
 
@@ -233,7 +235,7 @@ docker compose run --rm news-collector probe --date 2020-01-01
 ## 验证
 
 ```bash
-ruff check collector tests
+ruff check news_collector tests
 pytest
 ```
 

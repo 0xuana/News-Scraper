@@ -8,7 +8,7 @@ from importlib.resources import files
 
 import psycopg
 
-from collector.models import NewsItem
+from news_collector.models import NewsItem
 
 NEWS_UPSERT = """
 INSERT INTO news (
@@ -69,7 +69,7 @@ class NewsRepository:
         self._database_url = database_url
 
     def initialize(self) -> None:
-        schema = files("collector.db").joinpath("schema.sql").read_text()
+        schema = files("news_collector.db").joinpath("schema.sql").read_text()
         with psycopg.connect(self._database_url) as connection:
             connection.execute(schema)
 

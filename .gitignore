@@ -223,3 +223,4 @@ REQUIREMENTS.md
 TODO.md
 history/
 news*
+!news_collector/

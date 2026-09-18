@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Protocol
 
-from collector.models import NewsItem
+from news_collector.models import NewsItem
 
 
 class NewsClient(Protocol):

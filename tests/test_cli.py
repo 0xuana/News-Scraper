@@ -1,4 +1,4 @@
-from collector.__main__ import _parser
+from news_collector.__main__ import _parser
 
 
 def test_parser_accepts_scheduled_command() -> None:

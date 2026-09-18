@@ -2,7 +2,7 @@ from typing import Any
 
 import pytest
 
-from collector.collectors.backfill import COLLECTOR_NAME, CursorNotAdvancing, run_backfill
+from news_collector.collectors.backfill import COLLECTOR_NAME, CursorNotAdvancing, run_backfill
 
 
 def payload(*times: int) -> dict[str, Any]:

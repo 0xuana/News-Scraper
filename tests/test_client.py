@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from collector.aigupiao.client import AccessDenied, AigupiaoClient, RetriesExhausted
+from news_collector.aigupiao.client import AccessDenied, AigupiaoClient, RetriesExhausted
 
 
 def test_client_ignores_ambient_proxy_settings(monkeypatch: pytest.MonkeyPatch) -> None:

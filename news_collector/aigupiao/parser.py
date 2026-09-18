@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from collector.models import NewsItem, StockRelation, ThemeRelation, TopicRelation
+from news_collector.models import NewsItem, StockRelation, ThemeRelation, TopicRelation
 
 
 class InvalidPayload(ValueError):

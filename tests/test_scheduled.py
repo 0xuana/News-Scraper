@@ -2,8 +2,8 @@ from typing import Any
 
 import pytest
 
-from collector.collectors.final_refresh import COLLECTOR_NAME as FINAL_REFRESH_COLLECTOR_NAME
-from collector.collectors.scheduled import COLLECTOR_NAME, run_scheduled, run_scheduled_cycle
+from news_collector.collectors.final_refresh import COLLECTOR_NAME as FINAL_REFRESH_COLLECTOR_NAME
+from news_collector.collectors.scheduled import COLLECTOR_NAME, run_scheduled, run_scheduled_cycle
 
 
 def payload(*times: int) -> dict[str, Any]:

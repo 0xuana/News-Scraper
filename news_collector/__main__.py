@@ -7,19 +7,20 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from collector.aigupiao.client import AigupiaoClient
-from collector.aigupiao.parser import parse_payload
-from collector.collectors.backfill import run_backfill
-from collector.collectors.final_refresh import run_final_refresh
-from collector.collectors.live import run_live
-from collector.collectors.scheduled import run_scheduled
-from collector.config import Settings
-from collector.db.repository import NewsRepository
-from collector.utils.logging import configure_logging
+from news_collector.aigupiao.client import AigupiaoClient
+from news_collector.aigupiao.parser import parse_payload
+from news_collector.collectors.backfill import run_backfill
+from news_collector.collectors.final_refresh import run_final_refresh
+from news_collector.collectors.live import run_live
+from news_collector.collectors.scheduled import run_scheduled
+from news_collector.config import Settings
+from news_collector.db.repository import NewsRepository
+from news_collector.utils.logging import configure_logging
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog="news-collector",
         description="Collect Aigupiao news into PostgreSQL.",
         epilog=(
             "Collection timing, retry behavior, and scheduled windows are configured with "

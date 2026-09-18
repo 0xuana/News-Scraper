@@ -6,15 +6,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN addgroup --system collector \
-    && adduser --system --ingroup collector collector
+RUN addgroup --system news_collector \
+    && adduser --system --ingroup news_collector news_collector
 
 COPY pyproject.toml README.md ./
-COPY collector ./collector
+COPY news_collector ./news_collector
 
 RUN pip install --no-cache-dir .
 
-USER collector
+USER news_collector
 
-ENTRYPOINT ["python", "-m", "collector"]
+ENTRYPOINT ["python", "-m", "news_collector"]
 CMD ["scheduled"]

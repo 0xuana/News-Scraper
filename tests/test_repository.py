@@ -2,8 +2,8 @@ from typing import Any
 
 import pytest
 
-from collector.aigupiao.parser import parse_payload
-from collector.db.repository import NewsRepository
+from news_collector.aigupiao.parser import parse_payload
+from news_collector.db.repository import NewsRepository
 
 
 class Transaction:
@@ -43,7 +43,7 @@ def test_failed_news_write_rolls_back_before_checkpoint(monkeypatch: pytest.Monk
     })[0]
     connection = FailingConnection()
     monkeypatch.setattr(
-        "collector.db.repository.psycopg.connect", lambda database_url: connection
+        "news_collector.db.repository.psycopg.connect", lambda database_url: connection
     )
 
     with pytest.raises(RuntimeError, match="database write failed"):

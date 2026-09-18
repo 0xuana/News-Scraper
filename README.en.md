@@ -69,13 +69,13 @@ Run the offline unit tests and lint checks without activating the virtual enviro
 
 ```bash
 uv run pytest
-uv run ruff check collector tests
+uv run ruff check news_collector tests
 ```
 
 Probe one real API page without writing to PostgreSQL:
 
 ```bash
-uv run python -m collector probe --date 2026-09-17
+uv run python -m news_collector probe --date 2026-09-17
 ```
 
 To test database persistence, copy and configure the environment file, start PostgreSQL, and
@@ -83,15 +83,15 @@ run the initialization and backfill commands:
 
 ```bash
 cp .env.example .env
-uv run python -m collector init-db
-uv run python -m collector backfill
+uv run python -m news_collector init-db
+uv run python -m news_collector backfill
 ```
 
 Press `Ctrl+C` to stop backfill. A later invocation resumes from the stored checkpoint. Run the
 live collector with:
 
 ```bash
-uv run python -m collector live
+uv run python -m news_collector live
 ```
 
 </details>
@@ -106,7 +106,7 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 cp .env.example .env
-python -m collector init-db
+python -m news_collector init-db
 ```
 
 Set `DATABASE_URL` in `.env` before initializing the schema.
@@ -167,13 +167,17 @@ replace the example password in production.
 
 ## Run
 
+The Python package directory and module name are both `news_collector`, so source environments use
+`python -m news_collector`. An installed project also provides the equivalent `news-collector`
+console command, for example `news-collector scheduled`.
+
 ```bash
-.venv/bin/python -m collector backfill
-.venv/bin/python -m collector backfill --before 1789617870
-.venv/bin/python -m collector live
-.venv/bin/python -m collector scheduled
-.venv/bin/python -m collector final-refresh
-.venv/bin/python -m collector probe --date 2020-01-01
+.venv/bin/python -m news_collector backfill
+.venv/bin/python -m news_collector backfill --before 1789617870
+.venv/bin/python -m news_collector live
+.venv/bin/python -m news_collector scheduled
+.venv/bin/python -m news_collector final-refresh
+.venv/bin/python -m news_collector probe --date 2020-01-01
 ```
 
 | Command or argument | Meaning and behavior |
@@ -186,7 +190,7 @@ replace the example password in production.
 | `final-refresh` | Forces a refresh through the one-month boundary now, freezes due rows, saves its checkpoint, and exits |
 | `probe --date YYYY-MM-DD` | Uses 00:00 on that date in Asia/Shanghai as the one-page cursor, prints JSON, and never opens the database |
 
-Use `python -m collector COMMAND --help` for the same command-specific details. Normally,
+Use `python -m news_collector COMMAND --help` for the same command-specific details. Normally,
 `scheduled` is the only long-running process required; explicit `final-refresh` remains useful for
 an immediate maintenance run.
 

@@ -8,13 +8,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from collector.aigupiao.parser import parse_payload
-from collector.collectors.backfill import CursorNotAdvancing
-from collector.collectors.final_refresh import (
+from news_collector.aigupiao.parser import parse_payload
+from news_collector.collectors.backfill import CursorNotAdvancing
+from news_collector.collectors.final_refresh import (
     COLLECTOR_NAME as FINAL_REFRESH_COLLECTOR_NAME,
 )
-from collector.collectors.final_refresh import run_final_refresh
-from collector.collectors.protocols import NewsClient, Repository
+from news_collector.collectors.final_refresh import run_final_refresh
+from news_collector.collectors.protocols import NewsClient, Repository
 
 LOGGER = logging.getLogger(__name__)
 COLLECTOR_NAME = "aigupiao_scheduled"

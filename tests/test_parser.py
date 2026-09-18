@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from collector.aigupiao.parser import (
+from news_collector.aigupiao.parser import (
     InvalidPayload,
     extract_title,
     parse_payload,

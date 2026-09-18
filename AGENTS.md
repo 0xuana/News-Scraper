@@ -2,15 +2,15 @@
 
 ## Project Structure & Module Organization
 
-This repository is in its bootstrap phase; `REQUIREMENTS.md` defines the intended implementation. Keep application code under `collector/`, with the CLI entry point in `collector/__main__.py`. Separate responsibilities into `collector/aigupiao/` (HTTP client and response parsing), `collector/collectors/` (backfill and live loops), `collector/db/` (models and persistence), and `collector/utils/` (retry and logging helpers). Place tests in `tests/`, mirroring module names such as `tests/test_parser.py`. Keep generated artifacts and secrets out of source control.
+This repository is in its bootstrap phase; `REQUIREMENTS.md` defines the intended implementation. Keep application code under `news_collector/`, with the CLI entry point in `news_collector/__main__.py`. Separate responsibilities into `news_collector/aigupiao/` (HTTP client and response parsing), `news_collector/collectors/` (backfill and live loops), `news_collector/db/` (models and persistence), and `news_collector/utils/` (retry and logging helpers). Place tests in `tests/`, mirroring module names such as `tests/test_parser.py`. Keep generated artifacts and secrets out of source control.
 
 ## Build, Test, and Development Commands
 
 No packaging configuration is committed yet. When bootstrapping it, provide a reproducible virtual-environment workflow and keep these required interfaces stable:
 
-- `python -m collector backfill` — resume historical collection from the stored checkpoint.
-- `python -m collector live` — poll the newest feed continuously.
-- `python -m collector probe --date 2020-01-01` — inspect API history near a date.
+- `python -m news_collector backfill` — resume historical collection from the stored checkpoint.
+- `python -m news_collector live` — poll the newest feed continuously.
+- `python -m news_collector probe --date 2020-01-01` — inspect API history near a date.
 - `pytest` — run the full unit-test suite; production HTTP calls must be mocked.
 
 Document any added setup, lint, migration, or test commands in the README and packaging metadata.

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "aigupiao-news-collector"
+name = "news-collector"
 version = "0.1.0"
 description = "Reliable Aigupiao news collection for PostgreSQL"
 license = "Apache-2.0"
@@ -15,11 +15,14 @@ dependencies = [
   "python-dotenv>=1.0,<2",
 ]
 
+[project.scripts]
+news-collector = "news_collector.__main__:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8,<9", "ruff>=0.6"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["collector"]
+packages = ["news_collector"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

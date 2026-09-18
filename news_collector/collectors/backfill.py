@@ -7,8 +7,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from collector.aigupiao.parser import parse_payload
-from collector.collectors.protocols import NewsClient, Repository
+from news_collector.aigupiao.parser import parse_payload
+from news_collector.collectors.protocols import NewsClient, Repository
 
 LOGGER = logging.getLogger(__name__)
 COLLECTOR_NAME = "aigupiao_backfill"

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from collector.collectors.final_refresh import COLLECTOR_NAME, one_month_ago, run_final_refresh
+from news_collector.collectors.final_refresh import COLLECTOR_NAME, one_month_ago, run_final_refresh
 
 
 def payload(*times: int) -> dict[str, Any]:
