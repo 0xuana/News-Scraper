@@ -3,6 +3,9 @@ x-collector-environment: &collector-environment
   AIGUPIAO_BASE_URL: ${AIGUPIAO_BASE_URL:-https://apis.aigupiao.com/Express/express_list/}
   AIGUPIAO_REQUEST_INTERVAL: ${AIGUPIAO_REQUEST_INTERVAL:-3}
   LIVE_INTERVAL: ${LIVE_INTERVAL:-45}
+  INITIAL_BACKFILL_DAYS: ${INITIAL_BACKFILL_DAYS:-60}
+  SYNC_INTERVAL: ${SYNC_INTERVAL:-3600}
+  SYNC_OVERLAP_SECONDS: ${SYNC_OVERLAP_SECONDS:-300}
   HTTP_TIMEOUT: ${HTTP_TIMEOUT:-15}
   MAX_RETRIES: ${MAX_RETRIES:-5}
   MAX_BACKOFF: ${MAX_BACKOFF:-60}
@@ -39,7 +42,7 @@ services:
     build:
       context: .
     environment: *collector-environment
-    command: ["live"]
+    command: ["scheduled"]
     depends_on:
       init-db:
         condition: service_completed_successfully

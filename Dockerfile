@@ -17,4 +17,4 @@ RUN pip install --no-cache-dir .
 USER collector
 
 ENTRYPOINT ["python", "-m", "collector"]
-CMD ["live"]
+CMD ["scheduled"]

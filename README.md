@@ -118,7 +118,7 @@ docker compose up --build -d
 docker compose logs -f collector
 ```
 
-默认编排会启动 PostgreSQL，等待健康检查通过，初始化表结构，然后启动实时采集器。数据保存在 `postgres-data` 命名卷中。
+默认编排会启动 PostgreSQL，等待健康检查通过，初始化表结构，然后启动计划采集器。首次运行会分页回填最近 60 天；完成后每小时分页同步上次成功时间以来的新闻，并额外重叠 5 分钟以保护时间边界。同步检查点保存在 PostgreSQL 中，容器重启后不会重复执行完整的 60 天回填。数据保存在 `postgres-data` 命名卷中。
 
 ## 配置
 
@@ -130,6 +130,9 @@ docker compose logs -f collector
 | `AIGUPIAO_BASE_URL` | 爱股票 API 地址 | 项目内置地址 |
 | `AIGUPIAO_REQUEST_INTERVAL` | 回溯和最终刷新的请求间隔 | `3` 秒 |
 | `LIVE_INTERVAL` | 实时采集轮询间隔 | `45` 秒 |
+| `INITIAL_BACKFILL_DAYS` | 计划模式首次回填天数 | `60` 天 |
+| `SYNC_INTERVAL` | 计划模式同步间隔 | `3600` 秒 |
+| `SYNC_OVERLAP_SECONDS` | 每轮同步向前重叠的保护窗口 | `300` 秒 |
 | `HTTP_TIMEOUT` | HTTP 请求超时 | `15` 秒 |
 | `MAX_RETRIES` | 临时错误最大重试次数 | `5` |
 | `MAX_BACKOFF` | 指数退避最大等待时间 | `60` 秒 |
@@ -142,11 +145,12 @@ Docker Compose 会在容器内使用 `db` 作为数据库主机名，并覆盖�
 python -m collector backfill
 python -m collector backfill --before 1789617870
 python -m collector live
+python -m collector scheduled
 python -m collector final-refresh
 python -m collector probe --date 2020-01-01
 ```
 
-`backfill` 会从 `crawler_state` 恢复进度，每批新闻和检查点在同一事务中写入。`live` 始终请求最新页，并依靠新闻表主键去重。
+`backfill` 会从 `crawler_state` 恢复进度，每批新闻和检查点在同一事务中写入。`live` 始终请求最新页，并依靠新闻表主键去重。`scheduled` 首次回填配置的历史窗口，之后按同步间隔分页覆盖上次成功时间以来的数据；只有整轮成功后才推进检查点。
 
 建议每日运行一次 `final-refresh`，例如通过 cron 或 systemd timer。
 

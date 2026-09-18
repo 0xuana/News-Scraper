@@ -74,12 +74,16 @@ python -m pip install -e .
 .venv/bin/python -m collector backfill
 .venv/bin/python -m collector backfill --before 1789617870
 .venv/bin/python -m collector live
+.venv/bin/python -m collector scheduled
 .venv/bin/python -m collector final-refresh
 .venv/bin/python -m collector probe --date 2020-01-01
 ```
 
 Backfill resumes from `crawler_state`; its news writes and cursor update share one transaction.
 Live mode always requests the newest page and relies on the news primary key for idempotency.
+Scheduled mode initially paginates through the latest 60 days, then synchronizes every hour
+from the last successful checkpoint with a five-minute overlap. It advances the checkpoint
+only after a complete cycle, so container restarts safely resume incremental collection.
 
 Run `final-refresh` daily (for example, from cron or a systemd timer). It walks backward from
 the newest page through the one-calendar-month boundary, refreshes engagement and metadata,
@@ -106,7 +110,9 @@ docker compose logs -f collector
 ```
 
 The default stack starts PostgreSQL, waits for it to become healthy, initializes the schema,
-and then runs the live collector. PostgreSQL data is retained in the `postgres-data` named
+and then runs the scheduled collector. Its initial history window, synchronization interval,
+and overlap are configured with `INITIAL_BACKFILL_DAYS`, `SYNC_INTERVAL`, and
+`SYNC_OVERLAP_SECONDS`. PostgreSQL data is retained in the `postgres-data` named
 volume. `DATABASE_URL` from `.env` is intended for commands run on the host; Compose replaces
 it with the internal `db` hostname for containers.
 
