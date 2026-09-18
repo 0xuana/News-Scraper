@@ -2,7 +2,7 @@ from typing import Any
 
 import pytest
 
-from collector.collectors.scheduled import COLLECTOR_NAME, run_scheduled_cycle
+from collector.collectors.scheduled import COLLECTOR_NAME, run_scheduled, run_scheduled_cycle
 
 
 def payload(*times: int) -> dict[str, Any]:
@@ -116,3 +116,27 @@ def test_cycle_does_not_advance_checkpoint_when_pagination_fails() -> None:
         )
 
     assert repository.cursor == 100_000
+
+
+def test_scheduler_sleeps_for_configured_interval_after_complete_cycle() -> None:
+    client = FakeClient([payload(100_000, 13_000)])
+    repository = FakeRepository()
+    sleeps: list[float] = []
+
+    def stop_after_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        raise RuntimeError("stop scheduler")
+
+    with pytest.raises(RuntimeError, match="stop scheduler"):
+        run_scheduled(
+            client,
+            repository,
+            initial_backfill_days=1,
+            sync_interval=3_600,
+            overlap_seconds=300,
+            request_interval=0,
+            clock=lambda: 100_000,
+            sleep=stop_after_sleep,
+        )
+
+    assert sleeps == [3_600]
