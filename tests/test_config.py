@@ -23,6 +23,7 @@ def test_scheduled_configuration_defaults(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.delenv("INITIAL_BACKFILL_DAYS", raising=False)
     monkeypatch.delenv("SYNC_INTERVAL", raising=False)
     monkeypatch.delenv("SYNC_OVERLAP_SECONDS", raising=False)
+    monkeypatch.delenv("FINAL_REFRESH_INTERVAL", raising=False)
     monkeypatch.setattr("collector.config.load_dotenv", lambda: None)
 
     settings = Settings.from_env()
@@ -30,6 +31,7 @@ def test_scheduled_configuration_defaults(monkeypatch: pytest.MonkeyPatch) -> No
     assert settings.initial_backfill_days == 60
     assert settings.sync_interval == 3600.0
     assert settings.sync_overlap_seconds == 300
+    assert settings.final_refresh_interval == 86_400.0
 
 
 def test_scheduled_configuration_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -37,6 +39,7 @@ def test_scheduled_configuration_from_environment(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("INITIAL_BACKFILL_DAYS", "30")
     monkeypatch.setenv("SYNC_INTERVAL", "1800")
     monkeypatch.setenv("SYNC_OVERLAP_SECONDS", "120")
+    monkeypatch.setenv("FINAL_REFRESH_INTERVAL", "43200")
     monkeypatch.setattr("collector.config.load_dotenv", lambda: None)
 
     settings = Settings.from_env()
@@ -44,3 +47,4 @@ def test_scheduled_configuration_from_environment(monkeypatch: pytest.MonkeyPatc
     assert settings.initial_backfill_days == 30
     assert settings.sync_interval == 1800.0
     assert settings.sync_overlap_seconds == 120
+    assert settings.final_refresh_interval == 43_200.0

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from collector.collectors.final_refresh import one_month_ago, run_final_refresh
+from collector.collectors.final_refresh import COLLECTOR_NAME, one_month_ago, run_final_refresh
 
 
 def payload(*times: int) -> dict[str, Any]:
@@ -28,12 +28,15 @@ class FakeRepository:
     def __init__(self) -> None:
         self.saved = 0
         self.finalize_calls = 0
+        self.checkpoint: int | None = None
 
     def get_cursor(self, collector_name: str) -> int | None:
         return None
 
     def save_batch(self, items: Any, **kwargs: Any) -> None:
         self.saved += len(items)
+        if kwargs.get("collector_name") == COLLECTOR_NAME:
+            self.checkpoint = kwargs["cursor"]
 
     def finalize_due(self) -> int:
         self.finalize_calls += 1
@@ -63,4 +66,5 @@ def test_final_refresh_scans_to_cutoff_before_freezing() -> None:
     assert client.before == [0, cutoff + 10]
     assert repository.saved == 4
     assert repository.finalize_calls == 1
+    assert repository.checkpoint == int(now.timestamp())
     assert result.finalized == 4

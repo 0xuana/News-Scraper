@@ -2,6 +2,7 @@ from typing import Any
 
 import pytest
 
+from collector.collectors.final_refresh import COLLECTOR_NAME as FINAL_REFRESH_COLLECTOR_NAME
 from collector.collectors.scheduled import COLLECTOR_NAME, run_scheduled, run_scheduled_cycle
 
 
@@ -30,13 +31,21 @@ class FakeClient:
 
 
 class FakeRepository:
-    def __init__(self, cursor: int | None = None) -> None:
+    def __init__(
+        self,
+        cursor: int | None = None,
+        final_refresh_cursor: int | None = None,
+    ) -> None:
         self.cursor = cursor
+        self.final_refresh_cursor = final_refresh_cursor
         self.saved: list[tuple[list[int], str | None, int | None]] = []
+        self.finalize_calls = 0
 
     def get_cursor(self, collector_name: str) -> int | None:
-        assert collector_name == COLLECTOR_NAME
-        return self.cursor
+        if collector_name == COLLECTOR_NAME:
+            return self.cursor
+        assert collector_name == FINAL_REFRESH_COLLECTOR_NAME
+        return self.final_refresh_cursor
 
     def save_batch(
         self,
@@ -46,8 +55,14 @@ class FakeRepository:
         cursor: int | None = None,
     ) -> None:
         self.saved.append(([item.rec_time for item in items], collector_name, cursor))
-        if collector_name is not None:
+        if collector_name == COLLECTOR_NAME:
             self.cursor = cursor
+        elif collector_name == FINAL_REFRESH_COLLECTOR_NAME:
+            self.final_refresh_cursor = cursor
+
+    def finalize_due(self) -> int:
+        self.finalize_calls += 1
+        return 2
 
 
 def test_initial_cycle_stops_at_configured_history_cutoff() -> None:
@@ -119,7 +134,7 @@ def test_cycle_does_not_advance_checkpoint_when_pagination_fails() -> None:
 
 
 def test_scheduler_sleeps_for_configured_interval_after_complete_cycle() -> None:
-    client = FakeClient([payload(100_000, 13_000)])
+    client = FakeClient([payload(100_000, 13_000), payload()])
     repository = FakeRepository()
     sleeps: list[float] = []
 
@@ -140,3 +155,31 @@ def test_scheduler_sleeps_for_configured_interval_after_complete_cycle() -> None
         )
 
     assert sleeps == [3_600]
+    assert repository.finalize_calls == 1
+    assert repository.final_refresh_cursor == 100_000
+
+
+def test_scheduler_skips_final_refresh_until_its_interval_elapses() -> None:
+    client = FakeClient([payload(100_000, 13_000)])
+    repository = FakeRepository(final_refresh_cursor=99_500)
+    sleeps: list[float] = []
+
+    def stop_after_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        raise RuntimeError("stop scheduler")
+
+    with pytest.raises(RuntimeError, match="stop scheduler"):
+        run_scheduled(
+            client,
+            repository,
+            initial_backfill_days=1,
+            sync_interval=3_600,
+            overlap_seconds=300,
+            final_refresh_interval=1_000,
+            request_interval=0,
+            clock=lambda: 100_000,
+            sleep=stop_after_sleep,
+        )
+
+    assert sleeps == [3_600]
+    assert repository.finalize_calls == 0

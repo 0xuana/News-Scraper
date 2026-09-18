@@ -6,9 +6,14 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from collector.aigupiao.parser import parse_payload
 from collector.collectors.backfill import CursorNotAdvancing
+from collector.collectors.final_refresh import (
+    COLLECTOR_NAME as FINAL_REFRESH_COLLECTOR_NAME,
+)
+from collector.collectors.final_refresh import run_final_refresh
 from collector.collectors.protocols import NewsClient, Repository
 
 LOGGER = logging.getLogger(__name__)
@@ -79,6 +84,7 @@ def run_scheduled(
     initial_backfill_days: int = 60,
     sync_interval: float = 3_600.0,
     overlap_seconds: int = 300,
+    final_refresh_interval: float = 86_400.0,
     request_interval: float = 3.0,
     clock: Callable[[], float] = time.time,
     sleep: Callable[[float], None] = time.sleep,
@@ -86,10 +92,11 @@ def run_scheduled(
     """Run the initial history load and all subsequent periodic sync cycles."""
     while True:
         started = time.monotonic()
+        cycle_time = int(clock())
         result = run_scheduled_cycle(
             client,
             repository,
-            now=int(clock()),
+            now=cycle_time,
             initial_backfill_days=initial_backfill_days,
             overlap_seconds=overlap_seconds,
             request_interval=request_interval,
@@ -105,4 +112,25 @@ def run_scheduled(
             time.monotonic() - started,
             sync_interval,
         )
+        final_refresh_checkpoint = repository.get_cursor(FINAL_REFRESH_COLLECTOR_NAME)
+        if (
+            final_refresh_checkpoint is None
+            or cycle_time - final_refresh_checkpoint >= final_refresh_interval
+        ):
+            refresh_started = time.monotonic()
+            refresh_result = run_final_refresh(
+                client,
+                repository,
+                interval=request_interval,
+                sleep=sleep,
+                now=lambda timestamp=cycle_time: datetime.fromtimestamp(timestamp, UTC),
+            )
+            LOGGER.info(
+                "mode=scheduled phase=final_refresh refreshed=%d finalized=%d "
+                "cutoff=%s duration=%.2fs",
+                refresh_result.refreshed,
+                refresh_result.finalized,
+                refresh_result.cutoff.isoformat(),
+                time.monotonic() - refresh_started,
+            )
         sleep(sync_interval)

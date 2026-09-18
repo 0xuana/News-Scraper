@@ -14,6 +14,7 @@ from collector.collectors.backfill import CursorNotAdvancing
 from collector.collectors.protocols import NewsClient, Repository
 
 LOGGER = logging.getLogger(__name__)
+COLLECTOR_NAME = "aigupiao_final_refresh"
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +41,8 @@ def run_final_refresh(
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> FinalRefreshResult:
     """Refresh through the one-month boundary, then freeze all due records."""
-    cutoff = one_month_ago(now())
+    started_at = now()
+    cutoff = one_month_ago(started_at)
     cutoff_timestamp = int(cutoff.timestamp())
     cursor = 0
     refreshed = 0
@@ -49,6 +51,9 @@ def run_final_refresh(
         items = parse_payload(client.fetch(cursor))
         if not items:
             finalized = repository.finalize_due()
+            repository.save_batch(
+                [], collector_name=COLLECTOR_NAME, cursor=int(started_at.timestamp())
+            )
             return FinalRefreshResult(refreshed, finalized, cutoff)
 
         next_cursor = min(item.rec_time for item in items)
@@ -67,10 +72,12 @@ def run_final_refresh(
         )
         if next_cursor <= cutoff_timestamp:
             finalized = repository.finalize_due()
+            repository.save_batch(
+                [], collector_name=COLLECTOR_NAME, cursor=int(started_at.timestamp())
+            )
             LOGGER.info(
                 "FINAL REFRESH COMPLETE refreshed=%d finalized=%d", refreshed, finalized
             )
             return FinalRefreshResult(refreshed, finalized, cutoff)
         cursor = next_cursor
         sleep(interval)
-
