@@ -4,6 +4,16 @@ import pytest
 from collector.aigupiao.client import AccessDenied, AigupiaoClient, RetriesExhausted
 
 
+def test_client_ignores_ambient_proxy_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.setenv("ALL_PROXY", "socks://127.0.0.1:10808")
+
+    with AigupiaoClient("https://example.test"):
+        pass
+
+
 def test_client_retries_429_using_retry_after() -> None:
     calls = 0
     sleeps: list[float] = []

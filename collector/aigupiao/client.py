@@ -52,7 +52,11 @@ class AigupiaoClient:
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        self._client = httpx.Client(timeout=timeout, transport=transport)
+        self._client = httpx.Client(
+            timeout=timeout,
+            transport=transport,
+            trust_env=False,
+        )
         self._base_url = base_url
         self._max_retries = max_retries
         self._max_backoff = max_backoff
