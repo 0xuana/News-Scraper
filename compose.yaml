@@ -1,5 +1,5 @@
 x-collector-environment: &collector-environment
-  DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL for the external PostgreSQL service}
+  DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
   AIGUPIAO_BASE_URL: ${AIGUPIAO_BASE_URL:-https://apis.aigupiao.com/Express/express_list/}
   AIGUPIAO_REQUEST_INTERVAL: ${AIGUPIAO_REQUEST_INTERVAL:-3}
   LIVE_INTERVAL: ${LIVE_INTERVAL:-45}
