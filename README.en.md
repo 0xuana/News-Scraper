@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
-A long-running Python news collection service. It paginates through the Aigupiao news feed, parses article bodies, titles, stocks, themes, and topic relationships, and stores them idempotently in PostgreSQL with UPSERTs. The default Docker workflow backfills the latest 60 days once and then performs an hourly incremental synchronization with a protective time overlap. Synchronization checkpoints are persisted in the database, so network failures or container restarts do not restart a completed historical backfill from the beginning.
+A long-running Python news collection service. It paginates through the Aigupiao news feed, parses article bodies, titles, stocks, themes, and topic relationships, and stores them idempotently in PostgreSQL with UPSERTs. The default Docker workflow maintains rolling coverage of the latest 80 days and performs an hourly incremental synchronization with a protective time overlap. Page-level historical progress is persisted in PostgreSQL so an interrupted first backfill resumes from its last committed page.
 
 Use this project when you want to accumulate a long-term historical news corpus and use it as a RAG knowledge base to strengthen an agent's historical retrieval, context enrichment, event tracking, and analysis. It continuously provides structured, deduplicated, restart-safe news data for downstream chunking, embedding, and retrieval; the project itself does not include a vector database or RAG query service.
 
@@ -13,22 +13,25 @@ Use this project when you want to accumulate a long-term historical news corpus 
 - Read article bodies from `web_content` and extract titles from a leading `【…】` block.
 - Preserve cleaned raw JSON, including original content fields, after removing empty values.
 - Handle timeouts, rate limits, server errors, and JSON parsing failures.
-- Support a bounded initial historical backfill and paginated incremental synchronization that is not limited by the API's 20-item page size.
-- Advance a checkpoint only after the entire synchronization cycle succeeds; safely retry failed cycles after restart.
+- Maintain a configurable rolling-history window with an atomic page-and-cursor checkpoint.
+- Catch up current news first after a restart, then resume unfinished historical pagination.
 - Connect to PostgreSQL through `DATABASE_URL`, initialize the database, and run scheduled collection with Docker Compose.
 
 ## Scheduled synchronization semantics
 
 `scheduled` is the default Docker operating mode:
 
-- **Initial run:** page backward from the newest page. The cycle ends when the oldest news item on a page reaches `current time - INITIAL_BACKFILL_DAYS`, or when the API returns an empty page. On a page that crosses the boundary, only items inside the configured window are stored.
-- **Later runs:** page backward from the newest page until the oldest item reaches `last successful checkpoint - SYNC_OVERLAP_SECONDS`, or until the API returns an empty page.
-- **Success:** save the cycle start time as the new checkpoint only after every target page has been parsed and written successfully.
+- **Every run:** synchronize current news through `last successful checkpoint - SYNC_OVERLAP_SECONDS` first, then resume the historical cursor until the rolling `current time - INITIAL_BACKFILL_DAYS` boundary is covered.
+- **Historical progress:** save each page and its oldest cursor in one transaction. A restart resumes that cursor instead of replaying the entire historical window. Existing installations without this new marker establish the rolling window once after upgrading.
+- **Empty history:** an empty historical page is not immediately considered complete. The collector makes up to ten empty probes, moving ten minutes older each time; the counter and probe cursor also survive restarts.
+- **Success:** save the current-sync checkpoint only after all its target pages succeed, and save an independent historical coverage boundary after reaching it or exhausting the ten probes.
 - **Failure:** exhausted HTTP retries, parsing failures, database write failures, or a pagination cursor that no longer moves backward terminate the process without advancing the checkpoint. Docker then restarts it according to the service restart policy.
 - **Final refresh:** after regular synchronization, automatically refresh from the newest page through the one-calendar-month boundary and freeze all due records when no final refresh has succeeded before or when the independent checkpoint is at least `FINAL_REFRESH_INTERVAL` seconds old. This runs every 24 hours by default, so no separate cron job is required.
 - **Process lifecycle:** after regular synchronization and any final refresh due in that cycle complete, sleep for `SYNC_INTERVAL` seconds before starting the next cycle. Completing one cycle does not terminate the process.
 
-The “last successful checkpoint” is the Unix timestamp captured from the system clock at the **start** of the previous cycle and stored in the `aigupiao_scheduled` row of `crawler_state`. It is not the previous page cursor, the timestamp of the last stored article, or the cycle completion time. Using the start time covers news published while the previous cycle was running, and subtracting the overlap protects the pagination boundary. Final refreshes use an independent `aigupiao_final_refresh` checkpoint representing the start time associated with the last fully successful “refresh through the one-month boundary and freeze due records” operation. A partial failure advances neither corresponding checkpoint.
+The current-sync checkpoint is the Unix timestamp captured at the start of the previous successful cycle and stored in `aigupiao_scheduled`. Historical progress, empty-probe count, and completed coverage use separate `crawler_state` rows. Increasing `INITIAL_BACKFILL_DAYS` automatically extends the oldest coverage. Final refreshes use the independent `aigupiao_final_refresh` checkpoint.
+
+When a known, non-finalized news ID is collected again, only `view_num`, `support_num`, `oppose_num`, `comment_num`, `share_num`, and `agq_share_num` are refreshed. Stored article content, metadata, relationships, and raw JSON remain unchanged. Finalized rows are immutable.
 
 The overlap window defaults to five minutes. It protects news published in the same boundary second, records that become visible after a short delay, and feed changes around pagination time. News-ID UPSERTs absorb duplicate reads, trading a small amount of repeated work for a safer synchronization boundary.
 
@@ -152,7 +155,7 @@ docker compose up --build -d
 docker compose logs -f news-collector
 ```
 
-The default stack connects to the PostgreSQL service specified by `DATABASE_URL`, initializes its schema, and then starts the scheduled collector. It does not create or manage a PostgreSQL container. The first run paginates through the latest 60 days; later runs synchronize hourly from the last successful time with a five-minute protective overlap. It also performs an automatic final refresh every 24 hours by default. Both checkpoints are stored in PostgreSQL.
+The default stack connects to the PostgreSQL service specified by `DATABASE_URL`, initializes its schema, and then starts the scheduled collector. It does not create or manage a PostgreSQL container. It maintains the configured rolling history window (80 days by default), synchronizes hourly with a five-minute protective overlap, and resumes interrupted historical pagination from PostgreSQL state. It also performs an automatic final refresh every 24 hours by default.
 
 Docker fully supports `scheduled`, and it is the default command of the `news-collector` service in `compose.yaml`. Common operations are:
 
@@ -198,7 +201,7 @@ Review the settings in `.env` before initializing the database:
 | `AIGUPIAO_BASE_URL` | Aigupiao API endpoint used by every networked command | Built in |
 | `AIGUPIAO_REQUEST_INTERVAL` | Seconds to sleep between adjacent requests during `backfill`, `scheduled` pagination, and `final-refresh`; must be greater than zero | `3` |
 | `LIVE_INTERVAL` | Seconds `live` sleeps after each newest-page request; must be greater than zero | `45` |
-| `INITIAL_BACKFILL_DAYS` | History window, measured backward from the cycle start time, saved when `scheduled` has no synchronization checkpoint; must be a positive integer | `60` days |
+| `INITIAL_BACKFILL_DAYS` | Required rolling-history window measured in 24-hour days; increasing it automatically extends historical coverage; must be a positive integer | `80` days |
 | `SYNC_INTERVAL` | Seconds `scheduled` sleeps after regular synchronization and any due final refresh before starting the next cycle; must be greater than zero | `3600` |
 | `SYNC_OVERLAP_SECONDS` | Extra seconds a later `scheduled` cycle reads before the last successful checkpoint; may be `0` | `300` |
 | `FINAL_REFRESH_INTERVAL` | Minimum seconds between successful automatic final refreshes in `scheduled`; an independent database checkpoint preserves this across restarts; must be greater than zero | `86400` |
@@ -214,7 +217,7 @@ DATABASE_URL=postgresql://postgres:change-me@localhost:5432/news
 AIGUPIAO_BASE_URL=https://apis.aigupiao.com/Express/express_list/
 AIGUPIAO_REQUEST_INTERVAL=3
 LIVE_INTERVAL=45
-INITIAL_BACKFILL_DAYS=60
+INITIAL_BACKFILL_DAYS=80
 SYNC_INTERVAL=3600
 SYNC_OVERLAP_SECONDS=300
 FINAL_REFRESH_INTERVAL=86400
@@ -262,14 +265,14 @@ news-collector scheduled
 | `backfill` | Resume from its dedicated per-page checkpoint and continue paginating into history; save each page and its next-page cursor in one transaction, then exit on an empty page |
 | `backfill --before UNIX_TIMESTAMP` | Ignore the saved backfill checkpoint and start from the specified Unix-second cursor; `0` starts from the newest page. The override value itself is not written to the database before collection |
 | `live` | Always fetch the newest page with `before=0` without paginating; repeat after `LIVE_INTERVAL` and deduplicate with news-ID UPSERTs |
-| `scheduled` | Backfill a bounded window initially, then synchronize from the previous successful cycle start minus the overlap, while automatically running `final-refresh` on its independent cadence; runs indefinitely |
+| `scheduled` | Synchronize current news first, resume page-level rolling-history progress, and automatically run `final-refresh` on its independent cadence; runs indefinitely |
 | `final-refresh` | Force one final refresh immediately regardless of whether the automatic refresh is due; update data through the one-calendar-month boundary, freeze due rows, save its independent checkpoint, and exit |
 | `probe --date YYYY-MM-DD` | Convert 00:00 on that date in Asia/Shanghai into the `before` cursor, request and parse one page, and print the cursor and item count as JSON without connecting or writing to the database |
 
 ### How the commands relate
 
 - `init-db` is a prerequisite for every database-writing mode; `probe` is the only command that does not connect to the database. Docker Compose runs `init-db` automatically first.
-- `scheduled` is the recommended long-running everyday mode. On its first run it performs a **bounded historical backfill**, then runs periodic incremental synchronization and automatically invokes `final-refresh` according to `FINAL_REFRESH_INTERVAL`. You normally do not need a separate long-running `live` process or an external `final-refresh` timer.
+- `scheduled` is the recommended long-running everyday mode. It maintains a **resumable rolling-history window**, runs periodic incremental synchronization, and automatically invokes `final-refresh` according to `FINAL_REFRESH_INTERVAL`. You normally do not need a separate long-running `live` process or an external `final-refresh` timer.
 - `backfill` is not the same job as the initial backfill inside `scheduled`. It has an independent checkpoint and no day boundary, so it continues through all available history. Run it separately only when you need data older than `INITIAL_BACKFILL_DAYS`.
 - `live` polls only the newest page and is useful when you need lower latency than `SYNC_INTERVAL`; `scheduled` already refreshes current data periodically. Running both does not create duplicate rows because of UPSERTs, but it does create duplicate requests and writes.
 - Explicit `final-refresh` forces a refresh immediately without checking whether the automatic refresh is due. It is intended for maintenance, diagnostics, or immediately freezing due data.

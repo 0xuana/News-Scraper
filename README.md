@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
-一个面向长期运行的 Python 新闻采集服务。它从爱股票快讯接口分页获取新闻，解析正文、标题、股票、题材和话题关系，并通过 PostgreSQL UPSERT 幂等保存。默认 Docker 工作流首次回填最近 60 天，之后每小时执行一次带时间重叠的增量同步；同步检查点持久化在数据库中，因此网络失败或容器重启不会让已完成的历史回填从头开始。
+一个面向长期运行的 Python 新闻采集服务。它从爱股票快讯接口分页获取新闻，解析正文、标题、股票、题材和话题关系，并通过 PostgreSQL UPSERT 幂等保存。默认 Docker 工作流持续维护最近 80 天的滚动覆盖，并每小时执行一次带时间重叠的增量同步。历史分页进度持久化在 PostgreSQL 中，因此首次回填中断后会从最后成功提交的页面继续。
 
 当你希望长期积累历史新闻数据，并将其作为 RAG 知识库来增强 Agent 的历史检索、上下文补充、事件追踪和分析能力时，就会需要这个项目。它负责持续沉淀结构化、可去重且可恢复采集的新闻数据，为后续的分块、向量化和检索流程提供稳定数据源；项目本身不包含向量数据库或 RAG 查询服务。
 
@@ -13,22 +13,25 @@
 - 从 `web_content` 读取正文，并从开头的 `【…】` 中提取标题。
 - 保留去除空值后的原始 JSON，包括原始内容字段。
 - 处理超时、限流、服务端错误和 JSON 解析错误。
-- 支持有边界的首次历史回填，以及不会因单页 20 条限制而漏数的分页增量同步。
-- 只有整轮同步成功后才推进检查点；失败轮次会在重启后安全重试。
+- 维护可配置的滚动历史窗口，并在同一事务中提交每页数据及其游标。
+- 重启后先追平当前新闻，再恢复未完成的历史分页。
 - 支持 Docker Compose 通过 `DATABASE_URL` 连接 PostgreSQL、初始化数据库并运行计划采集。
 
 ## 计划同步语义
 
 `scheduled` 是 Docker 的默认运行模式：
 
-- **首次运行**：从最新页向历史翻页。当页面最旧新闻时间到达 `当前时间 - INITIAL_BACKFILL_DAYS`，或者 API 返回空页时，本轮结束。跨越边界的页面只保存边界以内的数据。
-- **后续运行**：从最新页向历史翻页。当页面最旧新闻时间到达 `上次成功检查点 - SYNC_OVERLAP_SECONDS`，或者 API 返回空页时，本轮结束。
-- **成功条件**：只有全部目标页面解析并写入成功后，才把本轮开始时间保存为新检查点。
+- **每次运行**：先同步到 `上次成功检查点 - SYNC_OVERLAP_SECONDS` 以追平当前新闻，再从历史游标继续，直到覆盖滚动边界 `当前时间 - INITIAL_BACKFILL_DAYS`。
+- **历史进度**：每页新闻和该页最旧游标在同一事务中保存。重启后从该游标继续，不再重放整个历史窗口。旧版本升级后因没有新标记，会重新建立一次滚动覆盖。
+- **历史空页**：一个空页不会立即被当成完成。采集器最多继续探测十次，每次向过去移动十分钟；空页计数和探测游标也能跨重启恢复。
+- **成功条件**：当前同步的全部目标页面成功后才推进当前检查点；到达历史边界或连续十次探测为空后，另行保存历史覆盖边界。
 - **异常条件**：HTTP 重试耗尽、解析失败、数据库写入失败或分页游标不再向过去移动时，进程退出且不推进检查点；Docker 会按重启策略重新运行。
 - **最终刷新**：常规同步成功后，如果从未成功执行最终刷新，或其独立检查点已过去 `FINAL_REFRESH_INTERVAL` 秒，便自动从最新页刷新到一个自然月前的边界，再冻结所有到期记录。默认每 24 小时执行一次，无需另配 cron。
 - **进程生命周期**：常规同步和本轮到期的最终刷新均结束后，休眠 `SYNC_INTERVAL` 秒再执行下一轮；整个进程不会因为完成一次同步而退出。
 
-这里的“上次成功检查点”是上一轮**开始时**由系统时钟取得的 Unix 秒时间，存储在 `crawler_state` 的 `aigupiao_scheduled` 记录中；它不是上一页游标、最后写入新闻的时间，也不是该轮结束时间。使用开始时间可以覆盖上一轮执行期间新发布的新闻，再减去重叠窗口以保护分页边界。最终刷新使用独立的 `aigupiao_final_refresh` 检查点，表示上一次“刷新到一个月边界并冻结到期记录”全部成功时对应的启动时间。任何中途失败都不会更新相应检查点。
+当前同步检查点是上一轮成功同步开始时的 Unix 秒时间，存储在 `aigupiao_scheduled`。历史进度、空页探测次数和已完成覆盖边界使用独立的 `crawler_state` 记录。增大 `INITIAL_BACKFILL_DAYS` 会自动向更早历史扩展。最终刷新继续使用独立的 `aigupiao_final_refresh` 检查点。
+
+再次采集到已存在且尚未冻结的新闻 ID 时，只刷新 `view_num`、`support_num`、`oppose_num`、`comment_num`、`share_num` 和 `agq_share_num`。已保存的正文、元数据、关联关系和原始 JSON 保持不变；已冻结记录完全不可变。
 
 时间重叠窗口默认是 5 分钟。它可以覆盖同一秒发布的边界新闻、接口短暂延迟可见的数据，以及同步时刻附近的分页变化。重叠数据通过新闻 ID 的 UPSERT 去重，因此用少量重复读取换取更可靠的边界完整性。
 
@@ -152,7 +155,7 @@ docker compose up --build -d
 docker compose logs -f news-collector
 ```
 
-默认编排会连接 `DATABASE_URL` 指定的 PostgreSQL，初始化表结构，然后启动计划采集器；它不会创建或管理 PostgreSQL 容器。首次运行会分页回填最近 60 天；完成后每小时分页同步上次成功时间以来的新闻，并额外重叠 5 分钟以保护时间边界。它还会默认每 24 小时自动执行最终刷新。两类检查点均保存在 PostgreSQL 中。
+默认编排会连接 `DATABASE_URL` 指定的 PostgreSQL，初始化表结构，然后启动计划采集器；它不会创建或管理 PostgreSQL 容器。采集器维护可配置的滚动历史窗口（默认 80 天），每小时进行一次带 5 分钟保护重叠的同步，并从 PostgreSQL 状态恢复中断的历史分页。它还会默认每 24 小时自动执行最终刷新。
 
 Docker 环境完整支持 `scheduled`，而且 `compose.yaml` 中 `news-collector` 服务的默认命令就是 `scheduled`。常用操作如下：
 
@@ -198,7 +201,7 @@ docker compose run --rm news-collector scheduled
 | `AIGUPIAO_BASE_URL` | 所有联网命令请求的爱股票 API 端点 | 项目内置地址 |
 | `AIGUPIAO_REQUEST_INTERVAL` | `backfill`、`scheduled` 分页及 `final-refresh` 相邻请求之间的休眠秒数；必须大于 0 | `3` |
 | `LIVE_INTERVAL` | `live` 每次请求最新页后的休眠秒数；必须大于 0 | `45` |
-| `INITIAL_BACKFILL_DAYS` | `scheduled` 没有同步检查点时，从本轮开始时间向前保存的自然秒数窗口；必须为正整数 | `60` 天 |
+| `INITIAL_BACKFILL_DAYS` | 以 24 小时天数计算的滚动历史窗口；增大该值会自动向更早历史扩展；必须为正整数 | `80` 天 |
 | `SYNC_INTERVAL` | `scheduled` 完成常规同步及到期最终刷新后，到下一轮开始前的休眠秒数；必须大于 0 | `3600` |
 | `SYNC_OVERLAP_SECONDS` | `scheduled` 后续轮次在上次成功检查点之前额外回溯的秒数；可为 `0` | `300` |
 | `FINAL_REFRESH_INTERVAL` | `scheduled` 两次成功自动最终刷新之间至少间隔的秒数；重启后仍由独立数据库检查点判断；必须大于 0 | `86400` |
@@ -214,7 +217,7 @@ DATABASE_URL=postgresql://postgres:change-me@localhost:5432/news
 AIGUPIAO_BASE_URL=https://apis.aigupiao.com/Express/express_list/
 AIGUPIAO_REQUEST_INTERVAL=3
 LIVE_INTERVAL=45
-INITIAL_BACKFILL_DAYS=60
+INITIAL_BACKFILL_DAYS=80
 SYNC_INTERVAL=3600
 SYNC_OVERLAP_SECONDS=300
 FINAL_REFRESH_INTERVAL=86400
@@ -262,14 +265,14 @@ news-collector scheduled
 | `backfill` | 从专用逐页检查点恢复并一直向历史翻页；每一页新闻和下一页游标在同一事务中保存，空页时退出 |
 | `backfill --before UNIX_TIMESTAMP` | 忽略已存 backfill 检查点，从指定 Unix 秒游标开始；传 `0` 表示从最新页开始。该覆盖值本身不会先写入数据库 |
 | `live` | 始终以 `before=0` 获取最新一页，不向历史翻页；每次等待 `LIVE_INTERVAL` 后重复，依靠新闻 ID UPSERT 去重 |
-| `scheduled` | 首次回填有界窗口，之后从上次成功轮次开始时间减去重叠量进行同步，并按独立周期自动执行 `final-refresh`；长期运行不主动退出 |
+| `scheduled` | 先同步当前新闻，再恢复逐页滚动历史进度，并按独立周期自动执行 `final-refresh`；长期运行不主动退出 |
 | `final-refresh` | 立即强制执行一次最终刷新，不理会自动刷新是否到期；更新一个自然月边界内的数据，冻结到期记录并保存独立检查点后退出 |
 | `probe --date YYYY-MM-DD` | 将上海时区该日 `00:00` 转成 `before` 游标，只请求并解析一页，以 JSON 输出游标和条数；不连接或写入数据库 |
 
 ### 命令之间的关系
 
 - `init-db` 是所有写库模式的前置步骤；`probe` 是唯一不连接数据库的命令。Docker Compose 会自动先执行 `init-db`。
-- `scheduled` 是推荐的日常长期模式。它在首次运行时完成**有边界的历史回填**，之后完成周期增量同步，并按 `FINAL_REFRESH_INTERVAL` 自动调用 `final-refresh`，因此一般不需要再单独长期运行 `live` 或另配 `final-refresh` 定时任务。
+- `scheduled` 是推荐的日常长期模式。它维护**可恢复的滚动历史窗口**，完成周期增量同步，并按 `FINAL_REFRESH_INTERVAL` 自动调用 `final-refresh`，因此一般不需要再单独长期运行 `live` 或另配 `final-refresh` 定时任务。
 - `backfill` 与 `scheduled` 的首次回填不是同一个任务。`backfill` 使用独立检查点、没有天数边界，会持续向全部可用历史翻页；只有确实需要超过 `INITIAL_BACKFILL_DAYS` 的更老数据时才单独运行。
 - `live` 只轮询最新一页，适合需要比 `SYNC_INTERVAL` 更低延迟的场景；`scheduled` 已经周期性覆盖最新数据。两者同时运行不会因 UPSERT 产生重复行，但会增加重复请求和写入。
 - 手动 `final-refresh` 会立即强制刷新，不检查自动刷新是否到期；它主要用于维护、排障或希望马上冻结到期数据的场景。

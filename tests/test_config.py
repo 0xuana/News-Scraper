@@ -28,7 +28,7 @@ def test_scheduled_configuration_defaults(monkeypatch: pytest.MonkeyPatch) -> No
 
     settings = Settings.from_env()
 
-    assert settings.initial_backfill_days == 60
+    assert settings.initial_backfill_days == 80
     assert settings.sync_interval == 3600.0
     assert settings.sync_overlap_seconds == 300
     assert settings.final_refresh_interval == 86_400.0
