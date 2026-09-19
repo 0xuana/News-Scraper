@@ -170,7 +170,7 @@ def test_ten_empty_probes_advance_by_ten_minutes_and_mark_coverage() -> None:
 
     assert client.before == [0, 50_000, 49_400, 48_800, 48_200, 47_600, 47_000,
                              46_400, 45_800, 45_200, 44_600]
-    assert repository.state[HISTORY_EMPTY_COUNT_NAME] == 10
+    assert repository.state[HISTORY_EMPTY_COUNT_NAME] == 0
     assert repository.state[HISTORY_COVERAGE_NAME] == 13_600
 
 

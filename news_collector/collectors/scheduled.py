@@ -110,6 +110,7 @@ def _extend_history(
             }
             if empty_count >= EMPTY_PROBE_LIMIT:
                 checkpoints[HISTORY_COVERAGE_NAME] = window_start
+                checkpoints[HISTORY_EMPTY_COUNT_NAME] = 0
             repository.save_batch([], checkpoints=checkpoints)
             cursor = probe_cursor
             if empty_count >= EMPTY_PROBE_LIMIT:
