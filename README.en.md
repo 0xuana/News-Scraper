@@ -2,84 +2,80 @@
 
 [简体中文](README.md) | [English](README.en.md)
 
-A long-running Python collector that paginates through the Aigupiao news feed, parses article,
-stock, theme, and topic data, and stores it idempotently in PostgreSQL. The default Docker
-workflow backfills the latest 60 days once, then performs an hourly paginated synchronization
-with a persisted checkpoint and a protective time overlap.
+A long-running Python news collection service. It paginates through the Aigupiao news feed, parses article bodies, titles, stocks, themes, and topic relationships, and stores them idempotently in PostgreSQL with UPSERTs. The default Docker workflow backfills the latest 60 days once and then performs an hourly incremental synchronization with a protective time overlap. Synchronization checkpoints are persisted in the database, so network failures or container restarts do not restart a completed historical backfill from the beginning.
 
-Use this project when you want to accumulate a long-term historical news corpus for a RAG
-knowledge base that strengthens an agent's retrieval, context, event tracking, and analysis.
-It supplies structured, deduplicated, restart-safe source data for downstream chunking, embedding,
-and retrieval; it does not itself provide a vector database or RAG query service.
+Use this project when you want to accumulate a long-term historical news corpus and use it as a RAG knowledge base to strengthen an agent's historical retrieval, context enrichment, event tracking, and analysis. It continuously provides structured, deduplicated, restart-safe news data for downstream chunking, embedding, and retrieval; the project itself does not include a vector database or RAG query service.
 
-## Collection behavior
+## Key features
 
-- Historical and incremental requests paginate by `rec_time`, so collection is not limited to
-  the newest 20-item response.
-- News and its relationships use idempotent UPSERTs, making overlap and retries safe.
-- A checkpoint advances only after the entire target window succeeds. A failed cycle is retried
-  after restart instead of being incorrectly marked complete.
-- Timeouts, rate limits, server failures, malformed JSON, and non-advancing cursors are handled
-  explicitly.
+- Paginate backward through historical news by the `rec_time` cursor with checkpoint-based resume support.
+- Continuously poll the latest news and write idempotently by news ID.
+- Read article bodies from `web_content` and extract titles from a leading `【…】` block.
+- Preserve cleaned raw JSON, including original content fields, after removing empty values.
+- Handle timeouts, rate limits, server errors, and JSON parsing failures.
+- Support a bounded initial historical backfill and paginated incremental synchronization that is not limited by the API's 20-item page size.
+- Advance a checkpoint only after the entire synchronization cycle succeeds; safely retry failed cycles after restart.
+- Start PostgreSQL, initialize the database, and run scheduled collection with one Docker Compose command.
 
-### Scheduled synchronization boundaries
+## Scheduled synchronization semantics
 
-`scheduled` is the default Docker mode:
+`scheduled` is the default Docker operating mode:
 
-- **Initial cycle:** pages backward until the oldest item reaches
-  `current time - INITIAL_BACKFILL_DAYS`, or until the server returns an empty page. Items older
-  than the boundary on the final page are not stored.
-- **Later cycles:** page backward until the oldest item reaches
-  `last successful checkpoint - SYNC_OVERLAP_SECONDS`, or until an empty page is returned.
-- **Failure:** exhausted HTTP retries, parsing/database failures, or a cursor that no longer moves
-  backward terminate the process without advancing the checkpoint. Docker can then restart it.
-- **Final refresh:** after regular synchronization, scheduled mode automatically refreshes through
-  the one-calendar-month boundary when `FINAL_REFRESH_INTERVAL` has elapsed (daily by default),
-  then freezes due rows. No separate cron job is required.
-- **Lifecycle:** after regular synchronization and any due final refresh complete, the process
-  sleeps for `SYNC_INTERVAL` seconds and repeats indefinitely.
+- **Initial run:** page backward from the newest page. The cycle ends when the oldest news item on a page reaches `current time - INITIAL_BACKFILL_DAYS`, or when the API returns an empty page. On a page that crosses the boundary, only items inside the configured window are stored.
+- **Later runs:** page backward from the newest page until the oldest item reaches `last successful checkpoint - SYNC_OVERLAP_SECONDS`, or until the API returns an empty page.
+- **Success:** save the cycle start time as the new checkpoint only after every target page has been parsed and written successfully.
+- **Failure:** exhausted HTTP retries, parsing failures, database write failures, or a pagination cursor that no longer moves backward terminate the process without advancing the checkpoint. Docker then restarts it according to the service restart policy.
+- **Final refresh:** after regular synchronization, automatically refresh from the newest page through the one-calendar-month boundary and freeze all due records when no final refresh has succeeded before or when the independent checkpoint is at least `FINAL_REFRESH_INTERVAL` seconds old. This runs every 24 hours by default, so no separate cron job is required.
+- **Process lifecycle:** after regular synchronization and any final refresh due in that cycle complete, sleep for `SYNC_INTERVAL` seconds before starting the next cycle. Completing one cycle does not terminate the process.
 
-The “last successful checkpoint” is the Unix timestamp captured at the **start** of the previous
-cycle and stored as `aigupiao_scheduled` in `crawler_state`. It is not a page cursor, the timestamp
-of the last stored article, or the cycle completion time. Starting from this timestamp covers news
-published while the prior cycle was running; the overlap adds boundary protection. Final refreshes
-use a separate `aigupiao_final_refresh` checkpoint. Neither checkpoint advances on partial failure.
+The “last successful checkpoint” is the Unix timestamp captured from the system clock at the **start** of the previous cycle and stored in the `aigupiao_scheduled` row of `crawler_state`. It is not the previous page cursor, the timestamp of the last stored article, or the cycle completion time. Using the start time covers news published while the previous cycle was running, and subtracting the overlap protects the pagination boundary. Final refreshes use an independent `aigupiao_final_refresh` checkpoint representing the start time associated with the last fully successful “refresh through the one-month boundary and freeze due records” operation. A partial failure advances neither corresponding checkpoint.
 
-The default five-minute overlap protects news published at the same boundary second, records
-that become visible late, and feeds that change around pagination time. Duplicate reads are
-absorbed by the news-ID UPSERT, trading a small amount of repeated work for a safer boundary.
+The overlap window defaults to five minutes. It protects news published in the same boundary second, records that become visible after a short delay, and feed changes around pagination time. News-ID UPSERTs absorb duplicate reads, trading a small amount of repeated work for a safer synchronization boundary.
 
-## Setup
+## Requirements
 
-Requires Python 3.11+ and PostgreSQL.
+- Python 3.11 or later
+- PostgreSQL
+- Optional: Docker and Docker Compose
+
+## Installation options
 
 <details open>
 <summary><strong>Option 1: uv (recommended for local testing)</strong></summary>
 
 
-The committed `uv.lock` lets `uv` create `.venv` and install locked dependencies. Install
-`uv` by following the [official installation guide](https://docs.astral.sh/uv/getting-started/installation/),
-then synchronize the project with its test tools:
+The committed `uv.lock` lets `uv` create `.venv` and install locked dependencies automatically. If `uv` is not installed, use the following command on Linux and macOS:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Install the project and development/test dependencies:
 
 ```bash
 uv sync --extra dev
 ```
 
-Run the offline unit tests and lint checks without activating the virtual environment:
+Run local tests and lint checks without contacting the production API or requiring PostgreSQL:
 
 ```bash
 uv run pytest
 uv run ruff check news_collector tests
 ```
 
-Probe one real API page without writing to PostgreSQL:
+Request one real API page without writing to the database:
 
 ```bash
 uv run python -m news_collector probe --date 2026-09-17
 ```
 
-To test database persistence, copy and configure the environment file, start PostgreSQL, and
-run the initialization and backfill commands:
+To test the complete persistence workflow, copy and configure `.env`, make sure PostgreSQL is running, and then initialize the database and start backfill:
 
 ```bash
 cp .env.example .env
@@ -87,18 +83,21 @@ uv run python -m news_collector init-db
 uv run python -m news_collector backfill
 ```
 
-Press `Ctrl+C` to stop backfill. A later invocation resumes from the stored checkpoint. Run the
-live collector with:
+Press `Ctrl+C` to stop backfill. Running the same command again resumes from the database checkpoint. Start live collection with:
 
 ```bash
 uv run python -m news_collector live
 ```
+
+See the [official uv installation guide](https://docs.astral.sh/uv/getting-started/installation/) for more installation options.
 
 </details>
 
 <details>
 <summary><strong>Option 2: requirements.txt</strong></summary>
 
+
+Use this option to run the collector directly:
 
 ```bash
 python3 -m venv .venv
@@ -109,39 +108,91 @@ cp .env.example .env
 python -m news_collector init-db
 ```
 
-Set `DATABASE_URL` in `.env` before initializing the schema.
+Activate the virtual environment on Windows PowerShell with:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
 
 </details>
 
 <details>
-<summary><strong>Option 3: editable development installation</strong></summary>
+<summary><strong>Option 3: pip development environment</strong></summary>
 
-For development, install `requirements-dev.txt` and the project in editable mode:
+
+`requirements-dev.txt` includes pytest and Ruff in addition to runtime dependencies:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -r requirements-dev.txt
 python -m pip install -e .
+cp .env.example .env
 ```
+
+You can also install development dependencies directly from the project metadata:
+
+```bash
+python -m pip install -e '.[dev]'
+```
+
+`requirements.txt` and `requirements-dev.txt` use the same dependency ranges as `pyproject.toml`. Keep all three files synchronized when changing project dependencies.
+
+</details>
+
+<details>
+<summary><strong>Option 4: Docker Compose (recommended for deployment)</strong></summary>
+
+
+```bash
+cp .env.example .env
+docker compose up --build -d
+docker compose logs -f news-collector
+```
+
+The default stack starts PostgreSQL, waits for its health check, initializes the schema, and then starts the scheduled collector. The first run paginates through the latest 60 days; later runs synchronize hourly from the last successful time with a five-minute protective overlap. It also performs an automatic final refresh every 24 hours by default. Both checkpoints are stored in PostgreSQL, so a container restart does not repeat the complete 60-day backfill or a final refresh that is not yet due. Data is retained in the `postgres-data` named volume.
+
+Docker fully supports `scheduled`, and it is the default command of the `news-collector` service in `compose.yaml`. Common operations are:
+
+```bash
+# Recommended: start PostgreSQL, initialization, and the long-running scheduled service
+docker compose up --build -d
+
+# Check service status and continuously follow scheduled logs
+docker compose ps
+docker compose logs -f news-collector
+
+# Restart from the same database checkpoints after a configuration change or failure
+docker compose restart news-collector
+
+# Foreground debugging only; scheduled runs until you press Ctrl+C
+docker compose run --rm news-collector scheduled
+```
+
+Use `docker compose up -d` to manage the long-running deployment. The final `run --rm` command is only for explicit verification or temporary debugging and does not replace the Compose service restart policy.
 
 </details>
 
 ## Configuration
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `DATABASE_URL` | PostgreSQL connection string | Required except for `probe` |
-| `AIGUPIAO_BASE_URL` | Aigupiao feed URL | Built in |
-| `AIGUPIAO_REQUEST_INTERVAL` | Delay between paginated requests | `3` seconds |
-| `LIVE_INTERVAL` | Delay between `live` requests | `45` seconds |
-| `INITIAL_BACKFILL_DAYS` | Initial scheduled history window | `60` days |
-| `SYNC_INTERVAL` | Delay after each scheduled cycle | `3600` seconds |
-| `SYNC_OVERLAP_SECONDS` | Backward overlap for incremental cycles | `300` seconds |
-| `FINAL_REFRESH_INTERVAL` | Minimum interval between successful automatic final refreshes | `86400` seconds |
-| `HTTP_TIMEOUT` | HTTP request timeout | `15` seconds |
-| `MAX_RETRIES` | Retries for temporary request failures | `5` |
-| `MAX_BACKOFF` | Maximum exponential-backoff delay | `60` seconds |
+Review the settings in `.env` before initializing the database:
 
-Copy `.env.example` and adjust it, for example:
+| Variable | Scope and exact behavior | Default |
+| --- | --- | --- |
+| `DATABASE_URL` | PostgreSQL connection string used by `init-db` and every database-writing collection command; only `probe` does not require it | None; required |
+| `AIGUPIAO_BASE_URL` | Aigupiao API endpoint used by every networked command | Built in |
+| `AIGUPIAO_REQUEST_INTERVAL` | Seconds to sleep between adjacent requests during `backfill`, `scheduled` pagination, and `final-refresh`; must be greater than zero | `3` |
+| `LIVE_INTERVAL` | Seconds `live` sleeps after each newest-page request; must be greater than zero | `45` |
+| `INITIAL_BACKFILL_DAYS` | History window, measured backward from the cycle start time, saved when `scheduled` has no synchronization checkpoint; must be a positive integer | `60` days |
+| `SYNC_INTERVAL` | Seconds `scheduled` sleeps after regular synchronization and any due final refresh before starting the next cycle; must be greater than zero | `3600` |
+| `SYNC_OVERLAP_SECONDS` | Extra seconds a later `scheduled` cycle reads before the last successful checkpoint; may be `0` | `300` |
+| `FINAL_REFRESH_INTERVAL` | Minimum seconds between successful automatic final refreshes in `scheduled`; an independent database checkpoint preserves this across restarts; must be greater than zero | `86400` |
+| `HTTP_TIMEOUT` | Timeout in seconds for one HTTP request; must be greater than zero | `15` |
+| `MAX_RETRIES` | Maximum additional attempts after the first request fails with a temporary HTTP or network error; may be `0` | `5` |
+| `MAX_BACKOFF` | Maximum seconds allowed for exponential-backoff and `Retry-After` waits; must be greater than zero | `60` |
+
+Copy `.env.example` and adjust it as needed, for example:
 
 ```dotenv
 DATABASE_URL=postgresql://postgres:change-me@localhost:5432/news
@@ -162,90 +213,36 @@ MAX_RETRIES=5
 MAX_BACKOFF=60
 ```
 
-URL-encode passwords containing characters such as `@`, `:`, or `/` inside `DATABASE_URL`, and
-replace the example password in production.
+URL-encode passwords containing characters such as `@`, `:`, or `/` inside `DATABASE_URL`. Replace the example password in production.
 
-## Run
+Docker Compose uses `db` as the database hostname inside containers and overrides the host environment's `DATABASE_URL`.
 
-The Python package directory and module name are both `news_collector`, so source environments use
-`python -m news_collector`. An installed project also provides the equivalent `news-collector`
-console command, for example `news-collector scheduled`.
+## Running
+
+The Python package directory and module name are both `news_collector`, so source environments use `python -m news_collector`. An installed project also provides the equivalent `news-collector` command, for example `news-collector scheduled`.
 
 ```bash
-.venv/bin/python -m news_collector backfill
-.venv/bin/python -m news_collector backfill --before 1789617870
-.venv/bin/python -m news_collector live
-.venv/bin/python -m news_collector scheduled
-.venv/bin/python -m news_collector final-refresh
-.venv/bin/python -m news_collector probe --date 2020-01-01
+python -m news_collector backfill
+python -m news_collector backfill --before 1789617870
+python -m news_collector live
+python -m news_collector scheduled
+python -m news_collector final-refresh
+python -m news_collector probe --date 2020-01-01
 ```
 
 | Command or argument | Meaning and behavior |
 | --- | --- |
-| `init-db` | Idempotently applies the bundled PostgreSQL schema and exits without collecting |
-| `backfill` | Resumes its per-page cursor and paginates indefinitely into history until an empty page |
-| `backfill --before UNIX_TIMESTAMP` | Ignores the saved backfill cursor for this run; `0` starts at the newest page |
-| `live` | Repeatedly fetches only `before=0`, without pagination, sleeping `LIVE_INTERVAL` between polls |
-| `scheduled` | Runs bounded checkpointed synchronization plus automatic checkpointed final refreshes indefinitely |
-| `final-refresh` | Forces a refresh through the one-month boundary now, freezes due rows, saves its checkpoint, and exits |
-| `probe --date YYYY-MM-DD` | Uses 00:00 on that date in Asia/Shanghai as the one-page cursor, prints JSON, and never opens the database |
+| `init-db` | Idempotently apply the bundled PostgreSQL schema and exit without collecting news |
+| `backfill` | Resume from its dedicated per-page checkpoint and continue paginating into history; save each page and its next-page cursor in one transaction, then exit on an empty page |
+| `backfill --before UNIX_TIMESTAMP` | Ignore the saved backfill checkpoint and start from the specified Unix-second cursor; `0` starts from the newest page. The override value itself is not written to the database before collection |
+| `live` | Always fetch the newest page with `before=0` without paginating; repeat after `LIVE_INTERVAL` and deduplicate with news-ID UPSERTs |
+| `scheduled` | Backfill a bounded window initially, then synchronize from the previous successful cycle start minus the overlap, while automatically running `final-refresh` on its independent cadence; runs indefinitely |
+| `final-refresh` | Force one final refresh immediately regardless of whether the automatic refresh is due; update data through the one-calendar-month boundary, freeze due rows, save its independent checkpoint, and exit |
+| `probe --date YYYY-MM-DD` | Convert 00:00 on that date in Asia/Shanghai into the `before` cursor, request and parse one page, and print the cursor and item count as JSON without connecting or writing to the database |
 
-Use `python -m news_collector COMMAND --help` for the same command-specific details. Normally,
-`scheduled` is the only long-running process required; explicit `final-refresh` remains useful for
-an immediate maintenance run.
+Use `python -m news_collector COMMAND --help` to see the same behavior and argument details for each subcommand. Normally, `scheduled` is the only long-running process required; explicit `final-refresh` remains available for immediate refreshes, diagnostics, or maintenance.
 
-## Verify
-
-```bash
-.venv/bin/ruff check .
-.venv/bin/pytest
-```
-
-Tests use mocks and local JSON fixtures; they never call the production API.
-
-## Docker
-
-<details>
-<summary><strong>Option 4: Docker Compose (recommended for deployment)</strong></summary>
-
-Copy the example environment file and change the PostgreSQL password before using the
-configuration outside local development:
-
-```bash
-cp .env.example .env
-docker compose up --build -d
-docker compose logs -f news-collector
-```
-
-The default stack starts PostgreSQL, waits for it to become healthy, initializes the schema,
-and then runs the scheduled collector. Its initial history window, synchronization interval,
-overlap, and automatic final-refresh cadence are configured with `INITIAL_BACKFILL_DAYS`,
-`SYNC_INTERVAL`, `SYNC_OVERLAP_SECONDS`, and `FINAL_REFRESH_INTERVAL`. PostgreSQL data is retained in the `postgres-data` named
-volume. `DATABASE_URL` from `.env` is intended for commands run on the host; Compose replaces
-it with the internal `db` hostname for containers.
-
-Docker fully supports `scheduled`; it is the default command of the `news-collector` service in
-`compose.yaml`. Common operations are:
-
-```bash
-# Recommended deployment: start PostgreSQL, initialization, and scheduled in the background
-docker compose up --build -d
-
-# Check service state and follow scheduled logs
-docker compose ps
-docker compose logs -f news-collector
-
-# Restart from the persisted database checkpoints after a change or failure
-docker compose restart news-collector
-
-# Foreground debugging only; scheduled runs until Ctrl+C
-docker compose run --rm news-collector scheduled
-```
-
-Use `docker compose up -d` for the managed long-running service. The final `run --rm` form is useful
-only for explicit verification or temporary debugging and does not replace the service restart policy.
-
-Run other collector modes as one-shot containers:
+Run these commands in one-shot Docker containers:
 
 ```bash
 docker compose run --rm news-collector scheduled
@@ -255,18 +252,24 @@ docker compose run --rm news-collector final-refresh
 docker compose run --rm news-collector probe --date 2020-01-01
 ```
 
-Because `scheduled` is long-running, start it with `docker compose up --build -d` as shown above
-rather than treating it as a one-shot command.
+`scheduled` is a long-running task. In Docker, the recommended startup method is `docker compose up --build -d` as described above, so it should not normally be treated as a one-shot command.
 
-Stop the services without deleting database data:
+## Verification
+
+```bash
+ruff check news_collector tests
+pytest
+```
+
+Tests use mocks and local JSON fixtures; they never contact the production API.
+
+## Stopping Docker services
 
 ```bash
 docker compose down
 ```
 
-To intentionally delete the PostgreSQL volume as well, use `docker compose down --volumes`.
-
-</details>
+This command preserves the database volume. Use `docker compose down --volumes` only when you intentionally want to delete the PostgreSQL data.
 
 ## License
 
