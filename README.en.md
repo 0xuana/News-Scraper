@@ -15,7 +15,7 @@ Use this project when you want to accumulate a long-term historical news corpus 
 - Handle timeouts, rate limits, server errors, and JSON parsing failures.
 - Support a bounded initial historical backfill and paginated incremental synchronization that is not limited by the API's 20-item page size.
 - Advance a checkpoint only after the entire synchronization cycle succeeds; safely retry failed cycles after restart.
-- Start PostgreSQL, initialize the database, and run scheduled collection with one Docker Compose command.
+- Connect to an existing PostgreSQL service, initialize the database, and run scheduled collection with Docker Compose.
 
 ## Scheduled synchronization semantics
 
@@ -147,16 +147,17 @@ python -m pip install -e '.[dev]'
 
 ```bash
 cp .env.example .env
+# Edit .env and set DOCKER_DATABASE_URL for the containers
 docker compose up --build -d
 docker compose logs -f news-collector
 ```
 
-The default stack starts PostgreSQL, waits for its health check, initializes the schema, and then starts the scheduled collector. The first run paginates through the latest 60 days; later runs synchronize hourly from the last successful time with a five-minute protective overlap. It also performs an automatic final refresh every 24 hours by default. Both checkpoints are stored in PostgreSQL, so a container restart does not repeat the complete 60-day backfill or a final refresh that is not yet due. Data is retained in the `postgres-data` named volume.
+The default stack connects to the existing PostgreSQL service specified by `DOCKER_DATABASE_URL`, initializes its schema, and then starts the scheduled collector. It does not create or manage a PostgreSQL container. The first run paginates through the latest 60 days; later runs synchronize hourly from the last successful time with a five-minute protective overlap. It also performs an automatic final refresh every 24 hours by default. Both checkpoints are stored in the external PostgreSQL service.
 
 Docker fully supports `scheduled`, and it is the default command of the `news-collector` service in `compose.yaml`. Common operations are:
 
 ```bash
-# Recommended: start PostgreSQL, initialization, and the long-running scheduled service
+# Recommended: connect to PostgreSQL and run initialization and the scheduled service
 docker compose up --build -d
 
 # Check service status and continuously follow scheduled logs
@@ -181,6 +182,7 @@ Review the settings in `.env` before initializing the database:
 | Variable | Scope and exact behavior | Default |
 | --- | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection string used by `init-db` and every database-writing collection command; only `probe` does not require it | None; required |
+| `DOCKER_DATABASE_URL` | Connection string used by Docker containers for the existing PostgreSQL service; use `host.docker.internal` when PostgreSQL runs on the Docker host | None; required by Docker |
 | `AIGUPIAO_BASE_URL` | Aigupiao API endpoint used by every networked command | Built in |
 | `AIGUPIAO_REQUEST_INTERVAL` | Seconds to sleep between adjacent requests during `backfill`, `scheduled` pagination, and `final-refresh`; must be greater than zero | `3` |
 | `LIVE_INTERVAL` | Seconds `live` sleeps after each newest-page request; must be greater than zero | `45` |
@@ -196,10 +198,7 @@ Copy `.env.example` and adjust it as needed, for example:
 
 ```dotenv
 DATABASE_URL=postgresql://postgres:change-me@localhost:5432/news
-POSTGRES_DB=news
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=change-me
-POSTGRES_PORT=5432
+DOCKER_DATABASE_URL=postgresql://postgres:change-me@host.docker.internal:5432/news
 
 AIGUPIAO_BASE_URL=https://apis.aigupiao.com/Express/express_list/
 AIGUPIAO_REQUEST_INTERVAL=3
@@ -213,9 +212,9 @@ MAX_RETRIES=5
 MAX_BACKOFF=60
 ```
 
-URL-encode passwords containing characters such as `@`, `:`, or `/` inside `DATABASE_URL`. Replace the example password in production.
+URL-encode passwords containing characters such as `@`, `:`, or `/` inside connection URLs. Replace the example password in production.
 
-Docker Compose uses `db` as the database hostname inside containers and overrides the host environment's `DATABASE_URL`.
+`DATABASE_URL` is used by `uv run` on the host. Compose containers use `DOCKER_DATABASE_URL`: use `host.docker.internal` when PostgreSQL runs on the same Linux host, or use a DNS name or IP reachable from the containers for a remote server. PostgreSQL must accept TCP connections from the Docker network.
 
 ## Running
 
@@ -293,7 +292,7 @@ Tests use mocks and local JSON fixtures; they never contact the production API.
 docker compose down
 ```
 
-This command preserves the database volume. Use `docker compose down --volumes` only when you intentionally want to delete the PostgreSQL data.
+PostgreSQL is managed externally, so this command only stops the collector containers and does not delete database data.
 
 ## License
 

@@ -15,7 +15,7 @@
 - 处理超时、限流、服务端错误和 JSON 解析错误。
 - 支持有边界的首次历史回填，以及不会因单页 20 条限制而漏数的分页增量同步。
 - 只有整轮同步成功后才推进检查点；失败轮次会在重启后安全重试。
-- 支持 Docker Compose 一键启动 PostgreSQL、初始化数据库并运行计划采集。
+- 支持 Docker Compose 连接现有 PostgreSQL、初始化数据库并运行计划采集。
 
 ## 计划同步语义
 
@@ -147,16 +147,17 @@ python -m pip install -e '.[dev]'
 
 ```bash
 cp .env.example .env
+# 编辑 .env，为容器设置 DOCKER_DATABASE_URL
 docker compose up --build -d
 docker compose logs -f news-collector
 ```
 
-默认编排会启动 PostgreSQL，等待健康检查通过，初始化表结构，然后启动计划采集器。首次运行会分页回填最近 60 天；完成后每小时分页同步上次成功时间以来的新闻，并额外重叠 5 分钟以保护时间边界。它还会默认每 24 小时自动执行最终刷新。两类检查点均保存在 PostgreSQL 中，容器重启后不会重复执行完整的 60 天回填或尚未到期的最终刷新。数据保存在 `postgres-data` 命名卷中。
+默认编排会连接 `DOCKER_DATABASE_URL` 指定的现有 PostgreSQL，初始化表结构，然后启动计划采集器；它不会创建或管理 PostgreSQL 容器。首次运行会分页回填最近 60 天；完成后每小时分页同步上次成功时间以来的新闻，并额外重叠 5 分钟以保护时间边界。它还会默认每 24 小时自动执行最终刷新。两类检查点均保存在外部 PostgreSQL 中。
 
 Docker 环境完整支持 `scheduled`，而且 `compose.yaml` 中 `news-collector` 服务的默认命令就是 `scheduled`。常用操作如下：
 
 ```bash
-# 推荐：在后台启动 PostgreSQL、初始化任务和长期 scheduled 服务
+# 推荐：连接现有 PostgreSQL，运行初始化任务和长期 scheduled 服务
 docker compose up --build -d
 
 # 确认服务状态并持续查看 scheduled 日志
@@ -181,6 +182,7 @@ docker compose run --rm news-collector scheduled
 | 变量 | 适用范围及具体行为 | 默认值 |
 | --- | --- | --- |
 | `DATABASE_URL` | `init-db` 及所有写库采集命令使用的 PostgreSQL 连接字符串；只有 `probe` 不需要 | 无，必填 |
+| `DOCKER_DATABASE_URL` | Docker 容器连接现有 PostgreSQL 的连接字符串；数据库在 Docker 主机上时主机名使用 `host.docker.internal` | 无，Docker 必填 |
 | `AIGUPIAO_BASE_URL` | 所有联网命令请求的爱股票 API 端点 | 项目内置地址 |
 | `AIGUPIAO_REQUEST_INTERVAL` | `backfill`、`scheduled` 分页及 `final-refresh` 相邻请求之间的休眠秒数；必须大于 0 | `3` |
 | `LIVE_INTERVAL` | `live` 每次请求最新页后的休眠秒数；必须大于 0 | `45` |
@@ -196,10 +198,7 @@ docker compose run --rm news-collector scheduled
 
 ```dotenv
 DATABASE_URL=postgresql://postgres:change-me@localhost:5432/news
-POSTGRES_DB=news
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=change-me
-POSTGRES_PORT=5432
+DOCKER_DATABASE_URL=postgresql://postgres:change-me@host.docker.internal:5432/news
 
 AIGUPIAO_BASE_URL=https://apis.aigupiao.com/Express/express_list/
 AIGUPIAO_REQUEST_INTERVAL=3
@@ -213,9 +212,9 @@ MAX_RETRIES=5
 MAX_BACKOFF=60
 ```
 
-如果密码包含 `@`、`:`、`/` 等字符，`DATABASE_URL` 中的密码需要进行 URL 编码。生产环境请替换示例密码。
+如果密码包含 `@`、`:`、`/` 等字符，连接 URL 中的密码需要进行 URL 编码。生产环境请替换示例密码。
 
-Docker Compose 会在容器内使用 `db` 作为数据库主机名，并覆盖主机环境中的 `DATABASE_URL`。
+`DATABASE_URL` 供主机上的 `uv run` 使用。`DOCKER_DATABASE_URL` 供 Compose 容器使用：数据库运行在同一台 Linux 主机时使用 `host.docker.internal`；数据库在另一台服务器时使用该服务器可从容器访问的 DNS 名称或 IP。PostgreSQL 必须允许来自 Docker 网络的 TCP 连接。
 
 ## 运行
 
@@ -293,7 +292,7 @@ uv run pytest
 docker compose down
 ```
 
-上述命令会保留数据库卷。只有确定需要删除 PostgreSQL 数据时，才使用 `docker compose down --volumes`。
+PostgreSQL 由外部管理，因此上述命令只停止采集器容器，不会删除数据库数据。
 
 ## 开源许可证
 
