@@ -147,12 +147,12 @@ python -m pip install -e '.[dev]'
 
 ```bash
 cp .env.example .env
-# Edit .env and set DOCKER_DATABASE_URL for the containers
+# Edit .env and set DATABASE_URL to the external PostgreSQL server
 docker compose up --build -d
 docker compose logs -f news-collector
 ```
 
-The default stack connects to the existing PostgreSQL service specified by `DOCKER_DATABASE_URL`, initializes its schema, and then starts the scheduled collector. It does not create or manage a PostgreSQL container. The first run paginates through the latest 60 days; later runs synchronize hourly from the last successful time with a five-minute protective overlap. It also performs an automatic final refresh every 24 hours by default. Both checkpoints are stored in the external PostgreSQL service.
+The default stack connects to the external PostgreSQL server specified by `DATABASE_URL`, initializes its schema, and then starts the scheduled collector. It does not create or manage a PostgreSQL container. The first run paginates through the latest 60 days; later runs synchronize hourly from the last successful time with a five-minute protective overlap. It also performs an automatic final refresh every 24 hours by default. Both checkpoints are stored in the external PostgreSQL service.
 
 Docker fully supports `scheduled`, and it is the default command of the `news-collector` service in `compose.yaml`. Common operations are:
 
@@ -181,8 +181,7 @@ Review the settings in `.env` before initializing the database:
 
 | Variable | Scope and exact behavior | Default |
 | --- | --- | --- |
-| `DATABASE_URL` | PostgreSQL connection string used by `init-db` and every database-writing collection command; only `probe` does not require it | None; required |
-| `DOCKER_DATABASE_URL` | Connection string used by Docker containers for the existing PostgreSQL service; use `host.docker.internal` when PostgreSQL runs on the Docker host | None; required by Docker |
+| `DATABASE_URL` | Connection string used by host commands and Docker containers for the external PostgreSQL server; only `probe` does not require it | None; required |
 | `AIGUPIAO_BASE_URL` | Aigupiao API endpoint used by every networked command | Built in |
 | `AIGUPIAO_REQUEST_INTERVAL` | Seconds to sleep between adjacent requests during `backfill`, `scheduled` pagination, and `final-refresh`; must be greater than zero | `3` |
 | `LIVE_INTERVAL` | Seconds `live` sleeps after each newest-page request; must be greater than zero | `45` |
@@ -197,8 +196,7 @@ Review the settings in `.env` before initializing the database:
 Copy `.env.example` and adjust it as needed, for example:
 
 ```dotenv
-DATABASE_URL=postgresql://postgres:change-me@localhost:5432/news
-DOCKER_DATABASE_URL=postgresql://postgres:change-me@host.docker.internal:5432/news
+DATABASE_URL=postgresql://postgres:change-me@db.example.com:5432/news
 
 AIGUPIAO_BASE_URL=https://apis.aigupiao.com/Express/express_list/
 AIGUPIAO_REQUEST_INTERVAL=3
@@ -214,7 +212,7 @@ MAX_BACKOFF=60
 
 URL-encode passwords containing characters such as `@`, `:`, or `/` inside connection URLs. Replace the example password in production.
 
-`DATABASE_URL` is used by `uv run` on the host. Compose containers use `DOCKER_DATABASE_URL`: use `host.docker.internal` when PostgreSQL runs on the same Linux host, or use a DNS name or IP reachable from the containers for a remote server. PostgreSQL must accept TCP connections from the Docker network.
+Both `uv run` on the host and Compose containers use `DATABASE_URL`. Its hostname must be the external PostgreSQL server's DNS name or IP reachable from the containers; do not use `localhost`. PostgreSQL must accept TCP connections from the deployment machine or Docker network.
 
 ## Running
 

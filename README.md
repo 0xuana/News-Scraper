@@ -147,12 +147,12 @@ python -m pip install -e '.[dev]'
 
 ```bash
 cp .env.example .env
-# 编辑 .env，为容器设置 DOCKER_DATABASE_URL
+# 编辑 .env，将 DATABASE_URL 设置为外部 PostgreSQL 服务器地址
 docker compose up --build -d
 docker compose logs -f news-collector
 ```
 
-默认编排会连接 `DOCKER_DATABASE_URL` 指定的现有 PostgreSQL，初始化表结构，然后启动计划采集器；它不会创建或管理 PostgreSQL 容器。首次运行会分页回填最近 60 天；完成后每小时分页同步上次成功时间以来的新闻，并额外重叠 5 分钟以保护时间边界。它还会默认每 24 小时自动执行最终刷新。两类检查点均保存在外部 PostgreSQL 中。
+默认编排会连接 `DATABASE_URL` 指定的外部 PostgreSQL 服务器，初始化表结构，然后启动计划采集器；它不会创建或管理 PostgreSQL 容器。首次运行会分页回填最近 60 天；完成后每小时分页同步上次成功时间以来的新闻，并额外重叠 5 分钟以保护时间边界。它还会默认每 24 小时自动执行最终刷新。两类检查点均保存在外部 PostgreSQL 中。
 
 Docker 环境完整支持 `scheduled`，而且 `compose.yaml` 中 `news-collector` 服务的默认命令就是 `scheduled`。常用操作如下：
 
@@ -181,8 +181,7 @@ docker compose run --rm news-collector scheduled
 
 | 变量 | 适用范围及具体行为 | 默认值 |
 | --- | --- | --- |
-| `DATABASE_URL` | `init-db` 及所有写库采集命令使用的 PostgreSQL 连接字符串；只有 `probe` 不需要 | 无，必填 |
-| `DOCKER_DATABASE_URL` | Docker 容器连接现有 PostgreSQL 的连接字符串；数据库在 Docker 主机上时主机名使用 `host.docker.internal` | 无，Docker 必填 |
+| `DATABASE_URL` | 主机命令和 Docker 容器连接外部 PostgreSQL 服务器的连接字符串；只有 `probe` 不需要 | 无，必填 |
 | `AIGUPIAO_BASE_URL` | 所有联网命令请求的爱股票 API 端点 | 项目内置地址 |
 | `AIGUPIAO_REQUEST_INTERVAL` | `backfill`、`scheduled` 分页及 `final-refresh` 相邻请求之间的休眠秒数；必须大于 0 | `3` |
 | `LIVE_INTERVAL` | `live` 每次请求最新页后的休眠秒数；必须大于 0 | `45` |
@@ -197,8 +196,7 @@ docker compose run --rm news-collector scheduled
 可复制 `.env.example` 后按需修改，例如：
 
 ```dotenv
-DATABASE_URL=postgresql://postgres:change-me@localhost:5432/news
-DOCKER_DATABASE_URL=postgresql://postgres:change-me@host.docker.internal:5432/news
+DATABASE_URL=postgresql://postgres:change-me@db.example.com:5432/news
 
 AIGUPIAO_BASE_URL=https://apis.aigupiao.com/Express/express_list/
 AIGUPIAO_REQUEST_INTERVAL=3
@@ -214,7 +212,7 @@ MAX_BACKOFF=60
 
 如果密码包含 `@`、`:`、`/` 等字符，连接 URL 中的密码需要进行 URL 编码。生产环境请替换示例密码。
 
-`DATABASE_URL` 供主机上的 `uv run` 使用。`DOCKER_DATABASE_URL` 供 Compose 容器使用：数据库运行在同一台 Linux 主机时使用 `host.docker.internal`；数据库在另一台服务器时使用该服务器可从容器访问的 DNS 名称或 IP。PostgreSQL 必须允许来自 Docker 网络的 TCP 连接。
+主机上的 `uv run` 和 Compose 容器都使用 `DATABASE_URL`。其中的主机名必须是外部 PostgreSQL 服务器可从 Docker 容器访问的 DNS 名称或 IP，不能使用 `localhost`。PostgreSQL 服务器必须允许来自部署机器或 Docker 网络的 TCP 连接。
 
 ## 运行
 

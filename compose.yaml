@@ -1,5 +1,5 @@
 x-collector-environment: &collector-environment
-  DATABASE_URL: ${DOCKER_DATABASE_URL:?Set DOCKER_DATABASE_URL for the external PostgreSQL service}
+  DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL for the external PostgreSQL service}
   AIGUPIAO_BASE_URL: ${AIGUPIAO_BASE_URL:-https://apis.aigupiao.com/Express/express_list/}
   AIGUPIAO_REQUEST_INTERVAL: ${AIGUPIAO_REQUEST_INTERVAL:-3}
   LIVE_INTERVAL: ${LIVE_INTERVAL:-45}
@@ -16,8 +16,6 @@ services:
     build:
       context: .
     environment: *collector-environment
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     command: ["init-db"]
     restart: "no"
 
@@ -25,8 +23,6 @@ services:
     build:
       context: .
     environment: *collector-environment
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     command: ["scheduled"]
     depends_on:
       init-db:
