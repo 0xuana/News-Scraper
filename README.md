@@ -219,15 +219,31 @@ Docker Compose 会在容器内使用 `db` 作为数据库主机名，并覆盖�
 
 ## 运行
 
-Python 包目录和模块名统一为 `news_collector`，因此源码环境使用 `python -m news_collector`。安装项目后也可以使用等价的命令行入口 `news-collector`，例如 `news-collector scheduled`。
+推荐使用 `uv run`，它会确保命令在项目锁定的 `.venv` 环境中执行，无需手动激活虚拟环境：
 
 ```bash
-python -m news_collector backfill
-python -m news_collector backfill --before 1789617870
-python -m news_collector live
-python -m news_collector scheduled
-python -m news_collector final-refresh
-python -m news_collector probe --date 2020-01-01
+uv sync --extra dev
+uv run news-collector init-db
+uv run news-collector scheduled
+
+# 其他按需命令
+uv run news-collector backfill
+uv run news-collector backfill --before 1789617870
+uv run news-collector live
+uv run news-collector final-refresh
+uv run news-collector probe --date 2020-01-01
+```
+
+如果不用 `uv run`，必须先激活已安装本项目的虚拟环境，再调用 `news-collector`。不要直接使用未确认来源的系统 `python -m`：
+
+```bash
+# Linux / macOS
+source .venv/bin/activate
+news-collector scheduled
+
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+news-collector scheduled
 ```
 
 | 命令或参数 | 含义和行为 |
@@ -240,12 +256,20 @@ python -m news_collector probe --date 2020-01-01
 | `final-refresh` | 立即强制执行一次最终刷新，不理会自动刷新是否到期；更新一个自然月边界内的数据，冻结到期记录并保存独立检查点后退出 |
 | `probe --date YYYY-MM-DD` | 将上海时区该日 `00:00` 转成 `before` 游标，只请求并解析一页，以 JSON 输出游标和条数；不连接或写入数据库 |
 
-各子命令也可用 `python -m news_collector COMMAND --help` 查看上述行为和参数。通常只需长期运行 `scheduled`；手动 `final-refresh` 保留给立即刷新、排障或维护场景。
+### 命令之间的关系
+
+- `init-db` 是所有写库模式的前置步骤；`probe` 是唯一不连接数据库的命令。Docker Compose 会自动先执行 `init-db`。
+- `scheduled` 是推荐的日常长期模式。它在首次运行时完成**有边界的历史回填**，之后完成周期增量同步，并按 `FINAL_REFRESH_INTERVAL` 自动调用 `final-refresh`，因此一般不需要再单独长期运行 `live` 或另配 `final-refresh` 定时任务。
+- `backfill` 与 `scheduled` 的首次回填不是同一个任务。`backfill` 使用独立检查点、没有天数边界，会持续向全部可用历史翻页；只有确实需要超过 `INITIAL_BACKFILL_DAYS` 的更老数据时才单独运行。
+- `live` 只轮询最新一页，适合需要比 `SYNC_INTERVAL` 更低延迟的场景；`scheduled` 已经周期性覆盖最新数据。两者同时运行不会因 UPSERT 产生重复行，但会增加重复请求和写入。
+- 手动 `final-refresh` 会立即强制刷新，不检查自动刷新是否到期；它主要用于维护、排障或希望马上冻结到期数据的场景。
+- `probe` 完全独立，只请求一页并打印统计，可用于验证 API 和日期游标。
+
+典型部署只需要：`init-db` 一次，然后长期运行一个 `scheduled`。避免同时启动多个 `scheduled`，也不要在一个 `scheduled` 正在执行时无必要地并行启动 `backfill` 或手动 `final-refresh`，以免重复消耗 API 和数据库资源。可用 `uv run news-collector COMMAND --help` 查看子命令帮助。
 
 Docker 环境下可以使用一次性容器运行这些命令：
 
 ```bash
-docker compose run --rm news-collector scheduled
 docker compose run --rm news-collector backfill
 docker compose run --rm news-collector backfill --before 1789617870
 docker compose run --rm news-collector final-refresh
@@ -257,8 +281,8 @@ docker compose run --rm news-collector probe --date 2020-01-01
 ## 验证
 
 ```bash
-ruff check news_collector tests
-pytest
+uv run ruff check news_collector tests
+uv run pytest
 ```
 
 测试使用 mock 和本地 JSON 样本，不会请求生产 API。

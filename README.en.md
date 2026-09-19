@@ -219,15 +219,31 @@ Docker Compose uses `db` as the database hostname inside containers and override
 
 ## Running
 
-The Python package directory and module name are both `news_collector`, so source environments use `python -m news_collector`. An installed project also provides the equivalent `news-collector` command, for example `news-collector scheduled`.
+Prefer `uv run`. It guarantees that commands execute in the project's locked `.venv` environment without requiring manual activation:
 
 ```bash
-python -m news_collector backfill
-python -m news_collector backfill --before 1789617870
-python -m news_collector live
-python -m news_collector scheduled
-python -m news_collector final-refresh
-python -m news_collector probe --date 2020-01-01
+uv sync --extra dev
+uv run news-collector init-db
+uv run news-collector scheduled
+
+# Other commands, used only when needed
+uv run news-collector backfill
+uv run news-collector backfill --before 1789617870
+uv run news-collector live
+uv run news-collector final-refresh
+uv run news-collector probe --date 2020-01-01
+```
+
+If you do not use `uv run`, activate a virtual environment in which this project is installed before invoking `news-collector`. Do not directly use an unverified system `python -m`:
+
+```bash
+# Linux / macOS
+source .venv/bin/activate
+news-collector scheduled
+
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+news-collector scheduled
 ```
 
 | Command or argument | Meaning and behavior |
@@ -240,12 +256,20 @@ python -m news_collector probe --date 2020-01-01
 | `final-refresh` | Force one final refresh immediately regardless of whether the automatic refresh is due; update data through the one-calendar-month boundary, freeze due rows, save its independent checkpoint, and exit |
 | `probe --date YYYY-MM-DD` | Convert 00:00 on that date in Asia/Shanghai into the `before` cursor, request and parse one page, and print the cursor and item count as JSON without connecting or writing to the database |
 
-Use `python -m news_collector COMMAND --help` to see the same behavior and argument details for each subcommand. Normally, `scheduled` is the only long-running process required; explicit `final-refresh` remains available for immediate refreshes, diagnostics, or maintenance.
+### How the commands relate
+
+- `init-db` is a prerequisite for every database-writing mode; `probe` is the only command that does not connect to the database. Docker Compose runs `init-db` automatically first.
+- `scheduled` is the recommended long-running everyday mode. On its first run it performs a **bounded historical backfill**, then runs periodic incremental synchronization and automatically invokes `final-refresh` according to `FINAL_REFRESH_INTERVAL`. You normally do not need a separate long-running `live` process or an external `final-refresh` timer.
+- `backfill` is not the same job as the initial backfill inside `scheduled`. It has an independent checkpoint and no day boundary, so it continues through all available history. Run it separately only when you need data older than `INITIAL_BACKFILL_DAYS`.
+- `live` polls only the newest page and is useful when you need lower latency than `SYNC_INTERVAL`; `scheduled` already refreshes current data periodically. Running both does not create duplicate rows because of UPSERTs, but it does create duplicate requests and writes.
+- Explicit `final-refresh` forces a refresh immediately without checking whether the automatic refresh is due. It is intended for maintenance, diagnostics, or immediately freezing due data.
+- `probe` is fully independent: it fetches one page and prints statistics to validate the API and a date cursor.
+
+A typical deployment needs one `init-db` run followed by one long-running `scheduled` process. Avoid multiple concurrent `scheduled` processes, and do not unnecessarily run `backfill` or a manual `final-refresh` in parallel with an active `scheduled` cycle, because doing so wastes API and database resources. Use `uv run news-collector COMMAND --help` for subcommand help.
 
 Run these commands in one-shot Docker containers:
 
 ```bash
-docker compose run --rm news-collector scheduled
 docker compose run --rm news-collector backfill
 docker compose run --rm news-collector backfill --before 1789617870
 docker compose run --rm news-collector final-refresh
@@ -257,8 +281,8 @@ docker compose run --rm news-collector probe --date 2020-01-01
 ## Verification
 
 ```bash
-ruff check news_collector tests
-pytest
+uv run ruff check news_collector tests
+uv run pytest
 ```
 
 Tests use mocks and local JSON fixtures; they never contact the production API.
