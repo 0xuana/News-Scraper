@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from importlib.resources import files
 
 import psycopg
@@ -30,37 +30,15 @@ INSERT INTO news (
     %(raw_json)s::jsonb, to_timestamp(%(rec_time)s) + interval '1 month'
 )
 ON CONFLICT (id) DO UPDATE SET
-    rec_time = EXCLUDED.rec_time,
-    published_at = EXCLUDED.published_at,
-    update_time = EXCLUDED.update_time,
-    title = EXCLUDED.title,
-    content = EXCLUDED.content,
-    important = EXCLUDED.important,
-    important_db = EXCLUDED.important_db,
-    selection = EXCLUDED.selection,
-    app_push = EXCLUDED.app_push,
-    source = EXCLUDED.source,
     view_num = EXCLUDED.view_num,
     support_num = EXCLUDED.support_num,
     oppose_num = EXCLUDED.oppose_num,
     comment_num = EXCLUDED.comment_num,
     share_num = EXCLUDED.share_num,
     agq_share_num = EXCLUDED.agq_share_num,
-    url = EXCLUDED.url,
-    theme = EXCLUDED.theme,
-    theme_quotes = EXCLUDED.theme_quotes,
-    concept_list = EXCLUDED.concept_list,
-    stock_info = EXCLUDED.stock_info,
-    stock_quotes = EXCLUDED.stock_quotes,
-    stock_code = EXCLUDED.stock_code,
-    quote_plate = EXCLUDED.quote_plate,
-    is_24_hour_hot_news = EXCLUDED.is_24_hour_hot_news,
-    jump_24_hour_hot_list = EXCLUDED.jump_24_hour_hot_list,
-    express_hot_state = EXCLUDED.express_hot_state,
-    raw_json = EXCLUDED.raw_json,
     last_collected_at = now()
 WHERE news.finalized_at IS NULL
-RETURNING id
+RETURNING id, (xmax = 0) AS inserted
 """
 
 
@@ -87,13 +65,21 @@ class NewsRepository:
         *,
         collector_name: str | None = None,
         cursor: int | None = None,
+        checkpoints: Mapping[str, int] | None = None,
     ) -> None:
         if (collector_name is None) != (cursor is None):
             raise ValueError("collector_name and cursor must be supplied together")
+        if checkpoints is not None and collector_name is not None:
+            raise ValueError("use either checkpoints or collector_name/cursor")
+        state = dict(checkpoints or {})
+        if collector_name is not None and cursor is not None:
+            state[collector_name] = cursor
         with psycopg.connect(self._database_url) as connection, connection.transaction():
             for item in items:
                 saved = connection.execute(NEWS_UPSERT, self._news_params(item)).fetchone()
                 if saved is None:
+                    continue
+                if not saved[1]:
                     continue
                 for stock in item.stocks:
                     connection.execute(
@@ -122,13 +108,13 @@ class NewsRepository:
                                old_title = EXCLUDED.old_title""",
                         (item.id, topic.id, topic.title, topic.is_hot, topic.old_title),
                     )
-            if collector_name is not None:
+            for state_name, state_cursor in state.items():
                 connection.execute(
                     """INSERT INTO crawler_state (collector_name, cursor)
                        VALUES (%s, %s)
                        ON CONFLICT (collector_name) DO UPDATE
                        SET cursor = EXCLUDED.cursor, updated_at = now()""",
-                    (collector_name, cursor),
+                    (state_name, state_cursor),
                 )
 
     def finalize_due(self) -> int:

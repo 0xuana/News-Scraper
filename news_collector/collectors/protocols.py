@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
 from news_collector.models import NewsItem
@@ -21,6 +21,7 @@ class Repository(Protocol):
         *,
         collector_name: str | None = None,
         cursor: int | None = None,
+        checkpoints: Mapping[str, int] | None = None,
     ) -> None: ...
 
     def finalize_due(self) -> int: ...

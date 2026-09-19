@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 
 from news_collector.aigupiao.parser import parse_payload
-from news_collector.db.repository import NewsRepository
+from news_collector.db.repository import NEWS_UPSERT, NewsRepository
 
 
 class Transaction:
@@ -69,3 +69,20 @@ def test_news_params_include_extracted_title() -> None:
 
     assert params["title"] == "Title"
     assert params["content"] == "Body"
+
+
+def test_existing_news_updates_only_engagement_counters() -> None:
+    update_clause = NEWS_UPSERT.split("ON CONFLICT (id) DO UPDATE SET", 1)[1]
+
+    for column in (
+        "view_num",
+        "support_num",
+        "oppose_num",
+        "comment_num",
+        "share_num",
+        "agq_share_num",
+    ):
+        assert f"{column} = EXCLUDED.{column}" in update_clause
+    for column in ("title", "content", "raw_json", "stock_info", "theme"):
+        assert f"{column} = EXCLUDED.{column}" not in update_clause
+    assert "WHERE news.finalized_at IS NULL" in update_clause

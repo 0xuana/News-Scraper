@@ -1,4 +1,4 @@
-"""Restart-safe initial and periodic news synchronization."""
+"""Restart-safe recent and rolling-history news synchronization."""
 
 from __future__ import annotations
 
@@ -18,7 +18,12 @@ from news_collector.collectors.protocols import NewsClient, Repository
 
 LOGGER = logging.getLogger(__name__)
 COLLECTOR_NAME = "aigupiao_scheduled"
+HISTORY_PROGRESS_NAME = "aigupiao_scheduled_history_progress"
+HISTORY_COVERAGE_NAME = "aigupiao_scheduled_history_coverage"
+HISTORY_EMPTY_COUNT_NAME = "aigupiao_scheduled_history_empty_count"
 SECONDS_PER_DAY = 86_400
+EMPTY_PROBE_LIMIT = 10
+EMPTY_PROBE_STEP_SECONDS = 600
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +32,107 @@ class ScheduledCycleResult:
     window_start: int
     received: int
     stored: int
+
+
+def _next_cursor(items: list, cursor: int) -> int:
+    next_cursor = min(item.rec_time for item in items)
+    if cursor != 0 and next_cursor >= cursor:
+        raise CursorNotAdvancing(
+            f"cursor did not advance: previous={cursor}, next={next_cursor}"
+        )
+    return next_cursor
+
+
+def _sync_recent(
+    client: NewsClient,
+    repository: Repository,
+    *,
+    now: int,
+    overlap_seconds: int,
+    request_interval: float,
+    sleep: Callable[[float], None],
+) -> tuple[str, int, int]:
+    """Catch up current news before historical recovery."""
+    checkpoint = repository.get_cursor(COLLECTOR_NAME)
+    mode = "initial" if checkpoint is None else "incremental"
+    target = None if checkpoint is None else max(0, checkpoint - overlap_seconds)
+    cursor = 0
+    received = 0
+    stored = 0
+
+    while True:
+        items = parse_payload(client.fetch(cursor))
+        if not items:
+            break
+        received += len(items)
+        next_cursor = _next_cursor(items, cursor)
+        selected = items if target is None else [item for item in items if item.rec_time >= target]
+        if selected:
+            repository.save_batch(selected)
+            stored += len(selected)
+        if target is None or next_cursor <= target:
+            break
+        cursor = next_cursor
+        sleep(request_interval)
+
+    repository.save_batch([], collector_name=COLLECTOR_NAME, cursor=now)
+    return mode, received, stored
+
+
+def _extend_history(
+    client: NewsClient,
+    repository: Repository,
+    *,
+    window_start: int,
+    now: int,
+    request_interval: float,
+    sleep: Callable[[float], None],
+) -> tuple[int, int]:
+    """Resume the oldest committed page until the rolling boundary is covered."""
+    coverage = repository.get_cursor(HISTORY_COVERAGE_NAME)
+    if coverage is not None and coverage <= window_start:
+        return 0, 0
+
+    progress = repository.get_cursor(HISTORY_PROGRESS_NAME)
+    empty_count = repository.get_cursor(HISTORY_EMPTY_COUNT_NAME) or 0
+    cursor = progress or 0
+    received = 0
+    stored = 0
+
+    while True:
+        items = parse_payload(client.fetch(cursor))
+        if not items:
+            empty_count += 1
+            probe_cursor = max(0, (cursor or now) - EMPTY_PROBE_STEP_SECONDS)
+            checkpoints = {
+                HISTORY_PROGRESS_NAME: probe_cursor,
+                HISTORY_EMPTY_COUNT_NAME: empty_count,
+            }
+            if empty_count >= EMPTY_PROBE_LIMIT:
+                checkpoints[HISTORY_COVERAGE_NAME] = window_start
+            repository.save_batch([], checkpoints=checkpoints)
+            cursor = probe_cursor
+            if empty_count >= EMPTY_PROBE_LIMIT:
+                return received, stored
+            sleep(request_interval)
+            continue
+
+        received += len(items)
+        empty_count = 0
+        next_cursor = _next_cursor(items, cursor)
+        selected = [item for item in items if item.rec_time >= window_start]
+        checkpoints = {
+            HISTORY_PROGRESS_NAME: next_cursor,
+            HISTORY_EMPTY_COUNT_NAME: 0,
+        }
+        if next_cursor <= window_start:
+            checkpoints[HISTORY_COVERAGE_NAME] = window_start
+        repository.save_batch(selected, checkpoints=checkpoints)
+        stored += len(selected)
+        if next_cursor <= window_start:
+            return received, stored
+        cursor = next_cursor
+        sleep(request_interval)
 
 
 def run_scheduled_cycle(
@@ -39,49 +145,37 @@ def run_scheduled_cycle(
     request_interval: float,
     sleep: Callable[[float], None] = time.sleep,
 ) -> ScheduledCycleResult:
-    """Synchronize one complete time window, then atomically advance its checkpoint."""
-    checkpoint = repository.get_cursor(COLLECTOR_NAME)
-    if checkpoint is None:
-        mode = "initial"
-        window_start = now - initial_backfill_days * SECONDS_PER_DAY
-    else:
-        mode = "incremental"
-        window_start = max(0, checkpoint - overlap_seconds)
-
-    cursor = 0
-    received = 0
-    stored = 0
-    while True:
-        items = parse_payload(client.fetch(cursor))
-        if not items:
-            break
-
-        received += len(items)
-        next_cursor = min(item.rec_time for item in items)
-        if cursor != 0 and next_cursor >= cursor:
-            raise CursorNotAdvancing(
-                f"cursor did not advance: previous={cursor}, next={next_cursor}"
-            )
-
-        selected = [item for item in items if item.rec_time >= window_start]
-        if selected:
-            repository.save_batch(selected)
-            stored += len(selected)
-
-        if next_cursor <= window_start:
-            break
-        cursor = next_cursor
-        sleep(request_interval)
-
-    repository.save_batch([], collector_name=COLLECTOR_NAME, cursor=now)
-    return ScheduledCycleResult(mode, window_start, received, stored)
+    """Catch up recent news, then establish or extend rolling-history coverage."""
+    window_start = now - initial_backfill_days * SECONDS_PER_DAY
+    mode, recent_received, recent_stored = _sync_recent(
+        client,
+        repository,
+        now=now,
+        overlap_seconds=overlap_seconds,
+        request_interval=request_interval,
+        sleep=sleep,
+    )
+    history_received, history_stored = _extend_history(
+        client,
+        repository,
+        window_start=window_start,
+        now=now,
+        request_interval=request_interval,
+        sleep=sleep,
+    )
+    return ScheduledCycleResult(
+        mode,
+        window_start,
+        recent_received + history_received,
+        recent_stored + history_stored,
+    )
 
 
 def run_scheduled(
     client: NewsClient,
     repository: Repository,
     *,
-    initial_backfill_days: int = 60,
+    initial_backfill_days: int = 80,
     sync_interval: float = 3_600.0,
     overlap_seconds: int = 300,
     final_refresh_interval: float = 86_400.0,
@@ -89,7 +183,7 @@ def run_scheduled(
     clock: Callable[[], float] = time.time,
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
-    """Run the initial history load and all subsequent periodic sync cycles."""
+    """Run recent synchronization and rolling-history coverage indefinitely."""
     while True:
         started = time.monotonic()
         cycle_time = int(clock())
