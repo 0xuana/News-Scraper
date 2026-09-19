@@ -156,14 +156,27 @@ docker compose logs -f news-collector
 
 Docker 环境完整支持 `scheduled`，而且 `compose.yaml` 中 `news-collector` 服务的默认命令就是 `scheduled`。常用操作如下：
 
+### 生产环境后台运行
+
+在生产环境中使用 detached 模式启动并构建服务：
+
 ```bash
-# 推荐：连接 PostgreSQL，运行初始化任务和长期 scheduled 服务
+# 构建镜像，在后台运行初始化任务和长期 scheduled 服务
 docker compose up --build -d
 
 # 确认服务状态并持续查看 scheduled 日志
 docker compose ps
 docker compose logs -f news-collector
 
+# 停止并移除当前 Compose 项目的容器和网络
+docker compose down
+```
+
+`-d` 表示 detached（后台）模式：命令返回后容器仍会继续运行，关闭终端不会停止采集器。执行 `docker compose logs -f news-collector` 时按 `Ctrl+C` 只会退出日志查看，不会停止容器。`news-collector` 配置了 `restart: unless-stopped`，因此异常退出或 Docker 服务随系统重启后会自动恢复；执行 `docker compose down` 则会明确停止并移除服务。
+
+调试或重新加载配置时还可以使用：
+
+```bash
 # 配置修改或异常退出后，使用同一数据库检查点重新启动
 docker compose restart news-collector
 
@@ -171,7 +184,7 @@ docker compose restart news-collector
 docker compose run --rm news-collector scheduled
 ```
 
-部署时应使用 `docker compose up -d` 管理长期服务；最后一条 `run --rm` 命令只是显式验证或临时调试 `scheduled`，不会替代 Compose 服务的重启策略。
+部署时应使用 `docker compose up --build -d` 管理长期服务；最后一条 `run --rm` 命令只是显式验证或临时调试 `scheduled`，不会替代 Compose 服务的重启策略。
 
 </details>
 

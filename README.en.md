@@ -156,14 +156,27 @@ The default stack connects to the PostgreSQL service specified by `DATABASE_URL`
 
 Docker fully supports `scheduled`, and it is the default command of the `news-collector` service in `compose.yaml`. Common operations are:
 
+### Run in production
+
+Build and start the services in detached mode for production:
+
 ```bash
-# Recommended: connect to PostgreSQL and run initialization and the scheduled service
+# Build the image and run initialization and the long-lived scheduled service in the background
 docker compose up --build -d
 
 # Check service status and continuously follow scheduled logs
 docker compose ps
 docker compose logs -f news-collector
 
+# Stop and remove this Compose project's containers and network
+docker compose down
+```
+
+`-d` means detached mode: the containers continue running after the command returns, and closing the terminal does not stop the collector. While running `docker compose logs -f news-collector`, pressing `Ctrl+C` only exits the log viewer; it does not stop the container. Because `news-collector` uses `restart: unless-stopped`, it recovers after a crash or after Docker starts during a system reboot. Running `docker compose down` explicitly stops and removes the services.
+
+For debugging or reloading configuration, you can also use:
+
+```bash
 # Restart from the same database checkpoints after a configuration change or failure
 docker compose restart news-collector
 
@@ -171,7 +184,7 @@ docker compose restart news-collector
 docker compose run --rm news-collector scheduled
 ```
 
-Use `docker compose up -d` to manage the long-running deployment. The final `run --rm` command is only for explicit verification or temporary debugging and does not replace the Compose service restart policy.
+Use `docker compose up --build -d` to manage the long-running deployment. The final `run --rm` command is only for explicit verification or temporary debugging and does not replace the Compose service restart policy.
 
 </details>
 
