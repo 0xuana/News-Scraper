@@ -27,6 +27,7 @@
 - **成功条件**：当前同步的全部目标页面成功后才推进当前检查点；到达历史边界或连续十次探测为空后，另行保存历史覆盖边界。
 - **异常条件**：HTTP 重试耗尽、解析失败、数据库写入失败或分页游标不再向过去移动时，进程退出且不推进检查点；Docker 会按重启策略重新运行。
 - **最终刷新**：常规同步成功后，如果从未成功执行最终刷新，或其独立检查点已过去 `FINAL_REFRESH_INTERVAL` 秒，便自动从最新页刷新到一个自然月前的边界，再冻结所有到期记录。默认每 24 小时执行一次，无需另配 cron。
+- **完整性审计**：使用 `scheduled --verify-coverage` 时，每 24 小时合并最近 `INITIAL_BACKFILL_DAYS` 内所有成功请求的覆盖区间，输出 DEBUG 级缺口日志，并从每个缺口的右边界向过去重新分页。断网导致检查失败时不推进检查点，等待 30 分钟后重试。
 - **进程生命周期**：常规同步和本轮到期的最终刷新均结束后，休眠 `SYNC_INTERVAL` 秒再执行下一轮；整个进程不会因为完成一次同步而退出。
 
 当前同步检查点是上一轮成功同步开始时的 Unix 秒时间，存储在 `aigupiao_scheduled`。历史进度、空页探测次数和已完成覆盖边界使用独立的 `crawler_state` 记录。增大 `INITIAL_BACKFILL_DAYS` 会自动向更早历史扩展。最终刷新继续使用独立的 `aigupiao_final_refresh` 检查点。
@@ -34,6 +35,8 @@
 再次采集到已存在且尚未冻结的新闻 ID 时，只刷新 `view_num`、`support_num`、`oppose_num`、`comment_num`、`share_num` 和 `agq_share_num`。已保存的正文、元数据、关联关系和原始 JSON 保持不变；已冻结记录完全不可变。
 
 时间重叠窗口默认是 5 分钟。它可以覆盖同一秒发布的边界新闻、接口短暂延迟可见的数据，以及同步时刻附近的分页变化。重叠数据通过新闻 ID 的 UPSERT 去重，因此用少量重复读取换取更可靠的边界完整性。
+
+每个成功解析并提交数据库的 API 请求都会在 `request_coverage` 表中保存一条记录，包括 UUID、采集模式、请求的 `before`、请求时间、该页新闻 ID，以及覆盖起止 Unix 时间。覆盖上界是请求的 `before`；`before=0` 时使用请求时刻。覆盖下界是该页最老新闻的 `rec_time`，与下一次历史分页使用的游标一致。空页也会留下请求记录，但起止时间相同，不会虚构一段已经验证的覆盖范围。新闻、检查点和对应请求记录在同一事务中提交，写库失败不会留下错误的覆盖证据。
 
 ## 环境要求
 
@@ -157,7 +160,7 @@ docker compose logs -f news-collector
 
 默认编排会连接 `DATABASE_URL` 指定的 PostgreSQL，初始化表结构，然后启动计划采集器；它不会创建或管理 PostgreSQL 容器。采集器维护可配置的滚动历史窗口（默认 80 天），每小时进行一次带 5 分钟保护重叠的同步，并从 PostgreSQL 状态恢复中断的历史分页。它还会默认每 24 小时自动执行最终刷新。
 
-Docker 环境完整支持 `scheduled`，而且 `compose.yaml` 中 `news-collector` 服务的默认命令就是 `scheduled`。常用操作如下：
+Docker 环境完整支持 `scheduled`，而且 `compose.yaml` 中 `news-collector` 服务的默认命令是 `scheduled --verify-coverage`，会自动执行每日完整性检查。常用操作如下：
 
 ### 生产环境后台运行
 
@@ -237,6 +240,8 @@ Compose 会先运行一次 `init-db`，成功后再启动 `news-collector`。部
 | `SYNC_INTERVAL` | `scheduled` 完成常规同步及到期最终刷新后，到下一轮开始前的休眠秒数；必须大于 0 | `3600` |
 | `SYNC_OVERLAP_SECONDS` | `scheduled` 后续轮次在上次成功检查点之前额外回溯的秒数；可为 `0` | `300` |
 | `FINAL_REFRESH_INTERVAL` | `scheduled` 两次成功自动最终刷新之间至少间隔的秒数；重启后仍由独立数据库检查点判断；必须大于 0 | `86400` |
+| `COVERAGE_CHECK_INTERVAL` | 启用 `--verify-coverage` 后，两次成功完整性检查之间至少间隔的秒数 | `86400` |
+| `COVERAGE_RETRY_INTERVAL` | 完整性检查因断网或仍有缺口而失败后，再次检查前等待的秒数 | `1800` |
 | `HTTP_TIMEOUT` | 单次 HTTP 请求超时秒数；必须大于 0 | `15` |
 | `MAX_RETRIES` | 首次请求失败后，对临时 HTTP/网络错误追加重试的最多次数；可为 `0` | `5` |
 | `MAX_BACKOFF` | 指数退避及 `Retry-After` 等待的秒数上限；必须大于 0 | `60` |
@@ -253,6 +258,8 @@ INITIAL_BACKFILL_DAYS=80
 SYNC_INTERVAL=3600
 SYNC_OVERLAP_SECONDS=300
 FINAL_REFRESH_INTERVAL=86400
+COVERAGE_CHECK_INTERVAL=86400
+COVERAGE_RETRY_INTERVAL=1800
 HTTP_TIMEOUT=15
 MAX_RETRIES=5
 MAX_BACKOFF=60
@@ -270,6 +277,7 @@ MAX_BACKOFF=60
 uv sync --extra dev
 uv run news-collector init-db
 uv run news-collector scheduled
+uv run news-collector scheduled --verify-coverage
 
 # 其他按需命令
 uv run news-collector backfill
@@ -298,6 +306,7 @@ news-collector scheduled
 | `backfill --before UNIX_TIMESTAMP` | 忽略已存 backfill 检查点，从指定 Unix 秒游标开始；传 `0` 表示从最新页开始。该覆盖值本身不会先写入数据库 |
 | `live` | 始终以 `before=0` 获取最新一页，不向历史翻页；每次等待 `LIVE_INTERVAL` 后重复，依靠新闻 ID UPSERT 去重 |
 | `scheduled` | 先同步当前新闻，再恢复逐页滚动历史进度，并按独立周期自动执行 `final-refresh`；长期运行不主动退出 |
+| `scheduled --verify-coverage` | 在 `scheduled` 基础上每日审计最近 `INITIAL_BACKFILL_DAYS` 的请求覆盖并自动补抓缺口；失败后默认等待 30 分钟重试 |
 | `final-refresh` | 立即强制执行一次最终刷新，不理会自动刷新是否到期；更新一个自然月边界内的数据，冻结到期记录并保存独立检查点后退出 |
 | `probe --date YYYY-MM-DD` | 将上海时区该日 `00:00` 转成 `before` 游标，只请求并解析一页，以 JSON 输出游标和条数；不连接或写入数据库 |
 

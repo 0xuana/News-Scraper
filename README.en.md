@@ -27,6 +27,7 @@ Use this project when you want to accumulate a long-term historical news corpus 
 - **Success:** save the current-sync checkpoint only after all its target pages succeed, and save an independent historical coverage boundary after reaching it or exhausting the ten probes.
 - **Failure:** exhausted HTTP retries, parsing failures, database write failures, or a pagination cursor that no longer moves backward terminate the process without advancing the checkpoint. Docker then restarts it according to the service restart policy.
 - **Final refresh:** after regular synchronization, automatically refresh from the newest page through the one-calendar-month boundary and freeze all due records when no final refresh has succeeded before or when the independent checkpoint is at least `FINAL_REFRESH_INTERVAL` seconds old. This runs every 24 hours by default, so no separate cron job is required.
+- **Coverage audit:** with `scheduled --verify-coverage`, merge all successful request intervals within the latest `INITIAL_BACKFILL_DAYS` every 24 hours, log gaps at DEBUG level, and page backward from the right edge of every gap. A network failure does not advance the checkpoint and is retried after 30 minutes.
 - **Process lifecycle:** after regular synchronization and any final refresh due in that cycle complete, sleep for `SYNC_INTERVAL` seconds before starting the next cycle. Completing one cycle does not terminate the process.
 
 The current-sync checkpoint is the Unix timestamp captured at the start of the previous successful cycle and stored in `aigupiao_scheduled`. Historical progress, empty-probe count, and completed coverage use separate `crawler_state` rows. Increasing `INITIAL_BACKFILL_DAYS` automatically extends the oldest coverage. Final refreshes use the independent `aigupiao_final_refresh` checkpoint.
@@ -34,6 +35,8 @@ The current-sync checkpoint is the Unix timestamp captured at the start of the p
 When a known, non-finalized news ID is collected again, only `view_num`, `support_num`, `oppose_num`, `comment_num`, `share_num`, and `agq_share_num` are refreshed. Stored article content, metadata, relationships, and raw JSON remain unchanged. Finalized rows are immutable.
 
 The overlap window defaults to five minutes. It protects news published in the same boundary second, records that become visible after a short delay, and feed changes around pagination time. News-ID UPSERTs absorb duplicate reads, trading a small amount of repeated work for a safer synchronization boundary.
+
+Every successfully parsed and committed API request creates a row in `request_coverage` containing a UUID, collector mode, requested `before`, request time, page news IDs, and Unix-time coverage bounds. The upper bound is `before`, or the request time when `before=0`; the lower bound is the oldest page `rec_time`, matching the next historical cursor. Empty pages are audited with equal bounds and do not invent a verified interval. News, checkpoints, and request coverage are committed in one transaction, so a failed database write cannot leave false coverage evidence.
 
 ## Requirements
 
@@ -157,7 +160,7 @@ docker compose logs -f news-collector
 
 The default stack connects to the PostgreSQL service specified by `DATABASE_URL`, initializes its schema, and then starts the scheduled collector. It does not create or manage a PostgreSQL container. It maintains the configured rolling history window (80 days by default), synchronizes hourly with a five-minute protective overlap, and resumes interrupted historical pagination from PostgreSQL state. It also performs an automatic final refresh every 24 hours by default.
 
-Docker fully supports `scheduled`, and it is the default command of the `news-collector` service in `compose.yaml`. Common operations are:
+Docker fully supports `scheduled`; the `news-collector` service defaults to `scheduled --verify-coverage`, enabling the daily integrity check. Common operations are:
 
 ### Run in production
 
@@ -205,6 +208,8 @@ Review the settings in `.env` before initializing the database:
 | `SYNC_INTERVAL` | Seconds `scheduled` sleeps after regular synchronization and any due final refresh before starting the next cycle; must be greater than zero | `3600` |
 | `SYNC_OVERLAP_SECONDS` | Extra seconds a later `scheduled` cycle reads before the last successful checkpoint; may be `0` | `300` |
 | `FINAL_REFRESH_INTERVAL` | Minimum seconds between successful automatic final refreshes in `scheduled`; an independent database checkpoint preserves this across restarts; must be greater than zero | `86400` |
+| `COVERAGE_CHECK_INTERVAL` | Minimum seconds between successful integrity checks when `--verify-coverage` is enabled | `86400` |
+| `COVERAGE_RETRY_INTERVAL` | Seconds to wait before another integrity check after a network failure or unresolved gap | `1800` |
 | `HTTP_TIMEOUT` | Timeout in seconds for one HTTP request; must be greater than zero | `15` |
 | `MAX_RETRIES` | Maximum additional attempts after the first request fails with a temporary HTTP or network error; may be `0` | `5` |
 | `MAX_BACKOFF` | Maximum seconds allowed for exponential-backoff and `Retry-After` waits; must be greater than zero | `60` |
@@ -221,6 +226,8 @@ INITIAL_BACKFILL_DAYS=80
 SYNC_INTERVAL=3600
 SYNC_OVERLAP_SECONDS=300
 FINAL_REFRESH_INTERVAL=86400
+COVERAGE_CHECK_INTERVAL=86400
+COVERAGE_RETRY_INTERVAL=1800
 HTTP_TIMEOUT=15
 MAX_RETRIES=5
 MAX_BACKOFF=60
@@ -238,6 +245,7 @@ Prefer `uv run`. It guarantees that commands execute in the project's locked `.v
 uv sync --extra dev
 uv run news-collector init-db
 uv run news-collector scheduled
+uv run news-collector scheduled --verify-coverage
 
 # Other commands, used only when needed
 uv run news-collector backfill
@@ -266,6 +274,7 @@ news-collector scheduled
 | `backfill --before UNIX_TIMESTAMP` | Ignore the saved backfill checkpoint and start from the specified Unix-second cursor; `0` starts from the newest page. The override value itself is not written to the database before collection |
 | `live` | Always fetch the newest page with `before=0` without paginating; repeat after `LIVE_INTERVAL` and deduplicate with news-ID UPSERTs |
 | `scheduled` | Synchronize current news first, resume page-level rolling-history progress, and automatically run `final-refresh` on its independent cadence; runs indefinitely |
+| `scheduled --verify-coverage` | Add a daily audit of request coverage over the latest `INITIAL_BACKFILL_DAYS`, automatically repair gaps, and retry failures after 30 minutes by default |
 | `final-refresh` | Force one final refresh immediately regardless of whether the automatic refresh is due; update data through the one-calendar-month boundary, freeze due rows, save its independent checkpoint, and exit |
 | `probe --date YYYY-MM-DD` | Convert 00:00 on that date in Asia/Shanghai into the `before` cursor, request and parse one page, and print the cursor and item count as JSON without connecting or writing to the database |
 
