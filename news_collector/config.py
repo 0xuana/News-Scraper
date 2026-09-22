@@ -44,6 +44,8 @@ class Settings:
     sync_interval: float = 3600.0
     sync_overlap_seconds: int = 300
     final_refresh_interval: float = 86_400.0
+    coverage_check_interval: float = 86_400.0
+    coverage_retry_interval: float = 1_800.0
 
     @classmethod
     def from_env(cls, *, require_database: bool = True) -> Settings:
@@ -63,4 +65,6 @@ class Settings:
             sync_interval=_positive_float("SYNC_INTERVAL", 3600.0),
             sync_overlap_seconds=_non_negative_int("SYNC_OVERLAP_SECONDS", 300),
             final_refresh_interval=_positive_float("FINAL_REFRESH_INTERVAL", 86_400.0),
+            coverage_check_interval=_positive_float("COVERAGE_CHECK_INTERVAL", 86_400.0),
+            coverage_retry_interval=_positive_float("COVERAGE_RETRY_INTERVAL", 1_800.0),
         )

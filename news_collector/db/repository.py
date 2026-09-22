@@ -8,7 +8,7 @@ from importlib.resources import files
 
 import psycopg
 
-from news_collector.models import NewsItem
+from news_collector.models import NewsItem, RequestCoverage
 
 NEWS_UPSERT = """
 INSERT INTO news (
@@ -42,6 +42,29 @@ RETURNING id, (xmax = 0) AS inserted
 """
 
 
+def coverage_gaps(
+    intervals: Sequence[tuple[int, int]], window_start: int, window_end: int
+) -> list[tuple[int, int]]:
+    """Return the complement of ordered or unordered coverage intervals."""
+    if window_start >= window_end:
+        raise ValueError("window_start must be earlier than window_end")
+    gaps: list[tuple[int, int]] = []
+    covered_until = window_start
+    for raw_start, raw_end in sorted(intervals):
+        start = max(window_start, raw_start)
+        end = min(window_end, raw_end)
+        if end <= covered_until:
+            continue
+        if start > covered_until:
+            gaps.append((covered_until, start))
+        covered_until = max(covered_until, end)
+        if covered_until >= window_end:
+            break
+    if covered_until < window_end:
+        gaps.append((covered_until, window_end))
+    return gaps
+
+
 class NewsRepository:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
@@ -66,6 +89,7 @@ class NewsRepository:
         collector_name: str | None = None,
         cursor: int | None = None,
         checkpoints: Mapping[str, int] | None = None,
+        request_coverage: RequestCoverage | None = None,
     ) -> None:
         if (collector_name is None) != (cursor is None):
             raise ValueError("collector_name and cursor must be supplied together")
@@ -116,6 +140,42 @@ class NewsRepository:
                        SET cursor = EXCLUDED.cursor, updated_at = now()""",
                     (state_name, state_cursor),
                 )
+            if request_coverage is not None:
+                connection.execute(
+                    """INSERT INTO request_coverage (
+                           request_id, collector_name, requested_before,
+                           coverage_start, coverage_end, news_ids, news_count, requested_at
+                       ) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, to_timestamp(%s))""",
+                    (
+                        request_coverage.request_id,
+                        request_coverage.collector_name,
+                        request_coverage.requested_before,
+                        request_coverage.coverage_start,
+                        request_coverage.coverage_end,
+                        json.dumps(request_coverage.news_ids),
+                        len(request_coverage.news_ids),
+                        request_coverage.requested_at,
+                    ),
+                )
+
+    def find_coverage_gaps(
+        self, window_start: int, window_end: int
+    ) -> list[tuple[int, int]]:
+        """Return uncovered ranges after merging all successful request intervals."""
+        if window_start >= window_end:
+            raise ValueError("window_start must be earlier than window_end")
+        with psycopg.connect(self._database_url) as connection:
+            rows = connection.execute(
+                """SELECT coverage_start, coverage_end
+                   FROM request_coverage
+                   WHERE coverage_end > %s AND coverage_start < %s
+                   ORDER BY coverage_start, coverage_end""",
+                (window_start, window_end),
+            ).fetchall()
+
+        return coverage_gaps(
+            [(int(start), int(end)) for start, end in rows], window_start, window_end
+        )
 
     def finalize_due(self) -> int:
         """Freeze entries whose one-month mutable period has elapsed."""

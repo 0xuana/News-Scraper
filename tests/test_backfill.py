@@ -35,7 +35,7 @@ class FakeRepository:
         return self.cursor
 
     def save_batch(self, items: Any, *, collector_name: str | None = None,
-                   cursor: int | None = None) -> None:
+                   cursor: int | None = None, **kwargs: Any) -> None:
         self.saved.append(([item.id for item in items], collector_name, cursor))
 
 
@@ -46,7 +46,7 @@ def test_backfill_calculates_cursor_and_stops_on_empty_page() -> None:
     result = run_backfill(client, repository, interval=0, sleep=lambda _: None)
 
     assert client.before == [0, 90]
-    assert repository.saved == [([1, 2, 3], COLLECTOR_NAME, 90)]
+    assert repository.saved == [([1, 2, 3], COLLECTOR_NAME, 90), ([], None, None)]
     assert result.total_processed == 3
     assert result.oldest_time == 90
 

@@ -7,8 +7,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from news_collector.aigupiao.parser import parse_payload
 from news_collector.collectors.protocols import NewsClient, Repository
+from news_collector.collectors.request import fetch_page
 
 LOGGER = logging.getLogger(__name__)
 COLLECTOR_NAME = "aigupiao_backfill"
@@ -40,8 +40,10 @@ def run_backfill(
 
     while True:
         started = time.monotonic()
-        items = parse_payload(client.fetch(cursor))
+        page = fetch_page(client, before=cursor, collector_name=COLLECTOR_NAME)
+        items = page.items
         if not items:
+            repository.save_batch([], request_coverage=page.coverage)
             LOGGER.info("BACKFILL COMPLETE total_processed=%d oldest_time=%s", total, oldest_time)
             return BackfillResult(total, oldest_id, oldest_time)
 
@@ -50,7 +52,12 @@ def run_backfill(
             raise CursorNotAdvancing(
                 f"cursor did not advance: previous={cursor}, next={next_cursor}"
             )
-        repository.save_batch(items, collector_name=COLLECTOR_NAME, cursor=next_cursor)
+        repository.save_batch(
+            items,
+            collector_name=COLLECTOR_NAME,
+            cursor=next_cursor,
+            request_coverage=page.coverage,
+        )
         oldest = min(items, key=lambda item: item.rec_time)
         oldest_id, oldest_time = oldest.id, oldest.rec_time
         total += len(items)
@@ -63,4 +70,3 @@ def run_backfill(
         )
         cursor = next_cursor
         sleep(interval)
-

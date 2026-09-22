@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 
 from news_collector.aigupiao.parser import parse_payload
-from news_collector.db.repository import NEWS_UPSERT, NewsRepository
+from news_collector.db.repository import NEWS_UPSERT, NewsRepository, coverage_gaps
 
 
 class Transaction:
@@ -86,3 +86,13 @@ def test_existing_news_updates_only_engagement_counters() -> None:
     for column in ("title", "content", "raw_json", "stock_info", "theme"):
         assert f"{column} = EXCLUDED.{column}" not in update_clause
     assert "WHERE news.finalized_at IS NULL" in update_clause
+
+
+def test_coverage_gaps_merges_overlapping_and_adjacent_intervals() -> None:
+    intervals = [(40, 60), (10, 30), (25, 40), (80, 120)]
+
+    assert coverage_gaps(intervals, 0, 100) == [(0, 10), (60, 80)]
+
+
+def test_coverage_gaps_reports_whole_window_without_requests() -> None:
+    assert coverage_gaps([], 100, 200) == [(100, 200)]

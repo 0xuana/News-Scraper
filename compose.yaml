@@ -7,6 +7,8 @@ x-collector-environment: &collector-environment
   SYNC_INTERVAL: ${SYNC_INTERVAL:-3600}
   SYNC_OVERLAP_SECONDS: ${SYNC_OVERLAP_SECONDS:-300}
   FINAL_REFRESH_INTERVAL: ${FINAL_REFRESH_INTERVAL:-86400}
+  COVERAGE_CHECK_INTERVAL: ${COVERAGE_CHECK_INTERVAL:-86400}
+  COVERAGE_RETRY_INTERVAL: ${COVERAGE_RETRY_INTERVAL:-1800}
   HTTP_TIMEOUT: ${HTTP_TIMEOUT:-15}
   MAX_RETRIES: ${MAX_RETRIES:-5}
   MAX_BACKOFF: ${MAX_BACKOFF:-60}
@@ -23,7 +25,7 @@ services:
     build:
       context: .
     environment: *collector-environment
-    command: ["scheduled"]
+    command: ["scheduled", "--verify-coverage"]
     depends_on:
       init-db:
         condition: service_completed_successfully

@@ -5,6 +5,12 @@ def test_parser_accepts_scheduled_command() -> None:
     assert _parser().parse_args(["scheduled"]).command == "scheduled"
 
 
+def test_scheduled_accepts_coverage_verification_argument() -> None:
+    args = _parser().parse_args(["scheduled", "--verify-coverage"])
+
+    assert args.verify_coverage is True
+
+
 def test_backfill_before_is_a_unix_timestamp() -> None:
     args = _parser().parse_args(["backfill", "--before", "1789617870"])
 

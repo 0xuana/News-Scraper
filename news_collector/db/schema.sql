@@ -64,3 +64,20 @@ CREATE TABLE IF NOT EXISTS crawler_state (
     cursor bigint NOT NULL,
     updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS request_coverage (
+    request_id uuid PRIMARY KEY,
+    collector_name text NOT NULL,
+    requested_before bigint NOT NULL,
+    coverage_start bigint NOT NULL,
+    coverage_end bigint NOT NULL,
+    news_ids jsonb NOT NULL,
+    news_count integer NOT NULL,
+    requested_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (coverage_start <= coverage_end),
+    CHECK (news_count >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS request_coverage_time_idx
+    ON request_coverage (coverage_start, coverage_end);

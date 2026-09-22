@@ -53,6 +53,7 @@ class FakeRepository:
         collector_name: str | None = None,
         cursor: int | None = None,
         checkpoints: dict[str, int] | None = None,
+        **kwargs: Any,
     ) -> None:
         state = dict(checkpoints or {})
         if collector_name is not None and cursor is not None:
@@ -63,6 +64,9 @@ class FakeRepository:
     def finalize_due(self) -> int:
         self.finalize_calls += 1
         return 2
+
+    def find_coverage_gaps(self, start: int, end: int) -> list[tuple[int, int]]:
+        return []
 
 
 def test_first_cycle_fetches_current_news_then_covers_history() -> None:
@@ -264,3 +268,38 @@ def test_scheduler_skips_final_refresh_until_interval_elapses() -> None:
 
     assert sleeps == [3_600]
     assert repository.finalize_calls == 0
+
+
+def test_scheduler_retries_failed_coverage_check_after_half_hour(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from news_collector.aigupiao.client import RetriesExhausted
+
+    client = FakeClient([payload(100_000, 13_000)])
+    repository = FakeRepository(**{HISTORY_COVERAGE_NAME: 0})
+    sleeps: list[float] = []
+
+    def fail_check(*args: Any, **kwargs: Any) -> None:
+        raise RetriesExhausted("offline")
+
+    def stop_after_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        raise RuntimeError("stop scheduler")
+
+    monkeypatch.setattr(
+        "news_collector.collectors.scheduled.run_coverage_check", fail_check
+    )
+    with pytest.raises(RuntimeError, match="stop scheduler"):
+        run_scheduled(
+            client,
+            repository,
+            initial_backfill_days=1,
+            sync_interval=3_600,
+            overlap_seconds=300,
+            verify_coverage=True,
+            request_interval=0,
+            clock=lambda: 100_000,
+            sleep=stop_after_sleep,
+        )
+
+    assert sleeps == [1_800]

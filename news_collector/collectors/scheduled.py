@@ -8,13 +8,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from news_collector.aigupiao.parser import parse_payload
+from news_collector.aigupiao.client import AigupiaoError
 from news_collector.collectors.backfill import CursorNotAdvancing
 from news_collector.collectors.final_refresh import (
     COLLECTOR_NAME as FINAL_REFRESH_COLLECTOR_NAME,
 )
 from news_collector.collectors.final_refresh import run_final_refresh
+from news_collector.collectors.integrity import (
+    CHECKPOINT_NAME as COVERAGE_CHECKPOINT_NAME,
+)
+from news_collector.collectors.integrity import CoverageIncomplete, run_coverage_check
 from news_collector.collectors.protocols import NewsClient, Repository
+from news_collector.collectors.request import fetch_page
 
 LOGGER = logging.getLogger(__name__)
 COLLECTOR_NAME = "aigupiao_scheduled"
@@ -61,15 +66,19 @@ def _sync_recent(
     stored = 0
 
     while True:
-        items = parse_payload(client.fetch(cursor))
+        page = fetch_page(client, before=cursor, collector_name=COLLECTOR_NAME)
+        items = page.items
         if not items:
+            repository.save_batch([], request_coverage=page.coverage)
             break
         received += len(items)
         next_cursor = _next_cursor(items, cursor)
         selected = items if target is None else [item for item in items if item.rec_time >= target]
         if selected:
-            repository.save_batch(selected)
+            repository.save_batch(selected, request_coverage=page.coverage)
             stored += len(selected)
+        else:
+            repository.save_batch([], request_coverage=page.coverage)
         if target is None or next_cursor <= target:
             break
         cursor = next_cursor
@@ -100,7 +109,8 @@ def _extend_history(
     stored = 0
 
     while True:
-        items = parse_payload(client.fetch(cursor))
+        page = fetch_page(client, before=cursor, collector_name=COLLECTOR_NAME)
+        items = page.items
         if not items:
             empty_count += 1
             probe_cursor = max(0, (cursor or now) - EMPTY_PROBE_STEP_SECONDS)
@@ -111,7 +121,9 @@ def _extend_history(
             if empty_count >= EMPTY_PROBE_LIMIT:
                 checkpoints[HISTORY_COVERAGE_NAME] = window_start
                 checkpoints[HISTORY_EMPTY_COUNT_NAME] = 0
-            repository.save_batch([], checkpoints=checkpoints)
+            repository.save_batch(
+                [], checkpoints=checkpoints, request_coverage=page.coverage
+            )
             cursor = probe_cursor
             if empty_count >= EMPTY_PROBE_LIMIT:
                 return received, stored
@@ -128,7 +140,9 @@ def _extend_history(
         }
         if next_cursor <= window_start:
             checkpoints[HISTORY_COVERAGE_NAME] = window_start
-        repository.save_batch(selected, checkpoints=checkpoints)
+        repository.save_batch(
+            selected, checkpoints=checkpoints, request_coverage=page.coverage
+        )
         stored += len(selected)
         if next_cursor <= window_start:
             return received, stored
@@ -180,6 +194,9 @@ def run_scheduled(
     sync_interval: float = 3_600.0,
     overlap_seconds: int = 300,
     final_refresh_interval: float = 86_400.0,
+    verify_coverage: bool = False,
+    coverage_check_interval: float = 86_400.0,
+    coverage_retry_interval: float = 1_800.0,
     request_interval: float = 3.0,
     clock: Callable[[], float] = time.time,
     sleep: Callable[[float], None] = time.sleep,
@@ -207,6 +224,28 @@ def run_scheduled(
             time.monotonic() - started,
             sync_interval,
         )
+        coverage_checkpoint = repository.get_cursor(COVERAGE_CHECKPOINT_NAME)
+        if verify_coverage and (
+            coverage_checkpoint is None
+            or cycle_time - coverage_checkpoint >= coverage_check_interval
+        ):
+            try:
+                run_coverage_check(
+                    client,
+                    repository,
+                    now=cycle_time,
+                    initial_backfill_days=initial_backfill_days,
+                    request_interval=request_interval,
+                    sleep=sleep,
+                )
+            except (AigupiaoError, CoverageIncomplete) as error:
+                LOGGER.warning(
+                    "mode=coverage_check result=retry error=%s retry_in=%.1fs",
+                    error,
+                    coverage_retry_interval,
+                )
+                sleep(coverage_retry_interval)
+                continue
         final_refresh_checkpoint = repository.get_cursor(FINAL_REFRESH_COLLECTOR_NAME)
         if (
             final_refresh_checkpoint is None

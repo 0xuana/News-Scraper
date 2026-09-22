@@ -53,13 +53,21 @@ def _parser() -> argparse.ArgumentParser:
             "on news-ID UPSERTs for deduplication."
         ),
     )
-    subparsers.add_parser(
+    scheduled = subparsers.add_parser(
         "scheduled",
         help="run bounded syncs and automatic final refreshes",
         description=(
             "Backfill INITIAL_BACKFILL_DAYS once, then synchronize from the last successful "
             "cycle checkpoint with overlap every SYNC_INTERVAL. Also runs final-refresh when "
             "FINAL_REFRESH_INTERVAL has elapsed."
+        ),
+    )
+    scheduled.add_argument(
+        "--verify-coverage",
+        action="store_true",
+        help=(
+            "audit the latest INITIAL_BACKFILL_DAYS daily and fetch any missing "
+            "request intervals"
         ),
     )
     subparsers.add_parser(
@@ -132,6 +140,9 @@ def main() -> int:
                 sync_interval=settings.sync_interval,
                 overlap_seconds=settings.sync_overlap_seconds,
                 final_refresh_interval=settings.final_refresh_interval,
+                verify_coverage=args.verify_coverage,
+                coverage_check_interval=settings.coverage_check_interval,
+                coverage_retry_interval=settings.coverage_retry_interval,
                 request_interval=settings.request_interval,
             )
         elif args.command == "final-refresh":

@@ -24,6 +24,8 @@ def test_scheduled_configuration_defaults(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.delenv("SYNC_INTERVAL", raising=False)
     monkeypatch.delenv("SYNC_OVERLAP_SECONDS", raising=False)
     monkeypatch.delenv("FINAL_REFRESH_INTERVAL", raising=False)
+    monkeypatch.delenv("COVERAGE_CHECK_INTERVAL", raising=False)
+    monkeypatch.delenv("COVERAGE_RETRY_INTERVAL", raising=False)
     monkeypatch.setattr("news_collector.config.load_dotenv", lambda: None)
 
     settings = Settings.from_env()
@@ -32,6 +34,8 @@ def test_scheduled_configuration_defaults(monkeypatch: pytest.MonkeyPatch) -> No
     assert settings.sync_interval == 3600.0
     assert settings.sync_overlap_seconds == 300
     assert settings.final_refresh_interval == 86_400.0
+    assert settings.coverage_check_interval == 86_400.0
+    assert settings.coverage_retry_interval == 1_800.0
 
 
 def test_scheduled_configuration_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,6 +44,8 @@ def test_scheduled_configuration_from_environment(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("SYNC_INTERVAL", "1800")
     monkeypatch.setenv("SYNC_OVERLAP_SECONDS", "120")
     monkeypatch.setenv("FINAL_REFRESH_INTERVAL", "43200")
+    monkeypatch.setenv("COVERAGE_CHECK_INTERVAL", "72000")
+    monkeypatch.setenv("COVERAGE_RETRY_INTERVAL", "900")
     monkeypatch.setattr("news_collector.config.load_dotenv", lambda: None)
 
     settings = Settings.from_env()
@@ -48,3 +54,5 @@ def test_scheduled_configuration_from_environment(monkeypatch: pytest.MonkeyPatc
     assert settings.sync_interval == 1800.0
     assert settings.sync_overlap_seconds == 120
     assert settings.final_refresh_interval == 43_200.0
+    assert settings.coverage_check_interval == 72_000.0
+    assert settings.coverage_retry_interval == 900.0

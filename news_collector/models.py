@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,3 +61,16 @@ class NewsItem:
     stocks: tuple[StockRelation, ...] = field(default_factory=tuple)
     themes: tuple[ThemeRelation, ...] = field(default_factory=tuple)
     topics: tuple[TopicRelation, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True, slots=True)
+class RequestCoverage:
+    """Auditable time range returned by one successful API request."""
+
+    request_id: UUID
+    collector_name: str
+    requested_before: int
+    coverage_start: int
+    coverage_end: int
+    news_ids: tuple[int, ...]
+    requested_at: int

@@ -9,9 +9,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from news_collector.aigupiao.parser import parse_payload
 from news_collector.collectors.backfill import CursorNotAdvancing
 from news_collector.collectors.protocols import NewsClient, Repository
+from news_collector.collectors.request import fetch_page
 
 LOGGER = logging.getLogger(__name__)
 COLLECTOR_NAME = "aigupiao_final_refresh"
@@ -48,11 +48,15 @@ def run_final_refresh(
     refreshed = 0
 
     while True:
-        items = parse_payload(client.fetch(cursor))
+        page = fetch_page(client, before=cursor, collector_name=COLLECTOR_NAME)
+        items = page.items
         if not items:
             finalized = repository.finalize_due()
             repository.save_batch(
-                [], collector_name=COLLECTOR_NAME, cursor=int(started_at.timestamp())
+                [],
+                collector_name=COLLECTOR_NAME,
+                cursor=int(started_at.timestamp()),
+                request_coverage=page.coverage,
             )
             return FinalRefreshResult(refreshed, finalized, cutoff)
 
@@ -61,7 +65,7 @@ def run_final_refresh(
             raise CursorNotAdvancing(
                 f"final-refresh cursor did not advance: previous={cursor}, next={next_cursor}"
             )
-        repository.save_batch(items)
+        repository.save_batch(items, request_coverage=page.coverage)
         refreshed += len(items)
         LOGGER.info(
             "mode=final_refresh before=%d received=%d oldest_time=%d cutoff=%d",
