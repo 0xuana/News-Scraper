@@ -46,7 +46,7 @@ def run_coverage_check(
     news_received = 0
 
     for gap_start, gap_end in reversed(gaps):
-        LOGGER.debug(
+        LOGGER.warning(
             "mode=coverage_check gap_start=%d gap_end=%d action=repair",
             gap_start,
             gap_end,
@@ -81,7 +81,7 @@ def run_coverage_check(
     remaining = repository.find_coverage_gaps(window_start, now)
     if remaining:
         for gap_start, gap_end in remaining:
-            LOGGER.debug(
+            LOGGER.warning(
                 "mode=coverage_check gap_start=%d gap_end=%d result=unresolved",
                 gap_start,
                 gap_end,

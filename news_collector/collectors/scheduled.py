@@ -205,25 +205,6 @@ def run_scheduled(
     while True:
         started = time.monotonic()
         cycle_time = int(clock())
-        result = run_scheduled_cycle(
-            client,
-            repository,
-            now=cycle_time,
-            initial_backfill_days=initial_backfill_days,
-            overlap_seconds=overlap_seconds,
-            request_interval=request_interval,
-            sleep=sleep,
-        )
-        LOGGER.info(
-            "mode=scheduled phase=%s window_start=%d received=%d stored=%d "
-            "duration=%.2fs next_sync_in=%.1fs",
-            result.mode,
-            result.window_start,
-            result.received,
-            result.stored,
-            time.monotonic() - started,
-            sync_interval,
-        )
         coverage_checkpoint = repository.get_cursor(COVERAGE_CHECKPOINT_NAME)
         if verify_coverage and (
             coverage_checkpoint is None
@@ -246,6 +227,25 @@ def run_scheduled(
                 )
                 sleep(coverage_retry_interval)
                 continue
+        result = run_scheduled_cycle(
+            client,
+            repository,
+            now=cycle_time,
+            initial_backfill_days=initial_backfill_days,
+            overlap_seconds=overlap_seconds,
+            request_interval=request_interval,
+            sleep=sleep,
+        )
+        LOGGER.info(
+            "mode=scheduled phase=%s window_start=%d received=%d stored=%d "
+            "duration=%.2fs next_sync_in=%.1fs",
+            result.mode,
+            result.window_start,
+            result.received,
+            result.stored,
+            time.monotonic() - started,
+            sync_interval,
+        )
         final_refresh_checkpoint = repository.get_cursor(FINAL_REFRESH_COLLECTOR_NAME)
         if (
             final_refresh_checkpoint is None
