@@ -161,33 +161,65 @@ Docker 环境完整支持 `scheduled`，而且 `compose.yaml` 中 `news-collecto
 
 ### 生产环境后台运行
 
-在生产环境中使用 detached 模式启动并构建服务：
+在项目目录中使用 detached 模式启动并构建服务：
 
 ```bash
 # 构建镜像，在后台运行初始化任务和长期 scheduled 服务
 docker compose up --build -d
 
-# 确认服务状态并持续查看 scheduled 日志
+# 查看服务状态；init-db 显示 Exited (0) 属于正常现象
 docker compose ps
-docker compose logs -f news-collector
+```
 
-# 停止并移除当前 Compose 项目的容器和网络
+`-d` 表示 detached（后台）模式：命令返回、SSH 断开或终端关闭后，容器仍会继续运行。`news-collector` 配置了 `restart: unless-stopped`，因此进程异常退出或 Docker daemon 重启后会自动恢复，并从 PostgreSQL 中保存的检查点继续采集。Linux 服务器还应确保 Docker daemon 随系统启动：
+
+```bash
+sudo systemctl enable --now docker
+```
+
+该命令仅适用于使用 systemd 管理 Docker 的 Linux。Docker Desktop 会自行管理 daemon，无需执行。
+
+### 日常管理指令
+
+以下命令都应在包含 `compose.yaml` 和 `.env` 的项目目录中执行：
+
+```bash
+# 查看容器状态
+docker compose ps
+
+# 查看最近 200 行日志并持续跟踪；按 Ctrl+C 仅退出日志查看
+docker compose logs --tail 200 -f news-collector
+
+# 暂停采集但保留容器
+docker compose stop news-collector
+
+# 启动已暂停的采集器
+docker compose start news-collector
+
+# 重启采集器，并从数据库检查点继续
+docker compose restart news-collector
+
+# 停止并移除本项目容器和网络
 docker compose down
 ```
 
-`-d` 表示 detached（后台）模式：命令返回后容器仍会继续运行，关闭终端不会停止采集器。执行 `docker compose logs -f news-collector` 时按 `Ctrl+C` 只会退出日志查看，不会停止容器。`news-collector` 配置了 `restart: unless-stopped`，因此异常退出或 Docker 服务随系统重启后会自动恢复；执行 `docker compose down` 则会明确停止并移除服务。
+`stop` 后容器不会因 `restart: unless-stopped` 自动启动，需执行 `start` 或再次执行 `up -d`。`down` 会移除 Compose 创建的容器和网络，但本项目的 Compose 不管理 PostgreSQL，也没有数据库卷，因此不会删除 PostgreSQL 中的新闻和检查点。
 
-调试或重新加载配置时还可以使用：
+修改 `.env` 后，单纯执行 `restart` 不会重新读取 Compose 环境变量，应重新创建容器：
 
 ```bash
-# 配置修改或异常退出后，使用同一数据库检查点重新启动
-docker compose restart news-collector
-
-# 仅用于前台调试；scheduled 会一直运行，按 Ctrl+C 停止
-docker compose run --rm news-collector scheduled
+docker compose up -d --force-recreate
 ```
 
-部署时应使用 `docker compose up --build -d` 管理长期服务；最后一条 `run --rm` 命令只是显式验证或临时调试 `scheduled`，不会替代 Compose 服务的重启策略。
+拉取新代码或修改依赖后，重新构建并替换采集器：
+
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail 200 -f news-collector
+```
+
+Compose 会先运行一次 `init-db`，成功后再启动 `news-collector`。部署时应使用 `docker compose up --build -d` 管理长期服务；如需临时前台验证 `scheduled`，可执行 `docker compose run --rm news-collector scheduled`，按 `Ctrl+C` 会停止该临时容器，它不会替代长期服务。
 
 </details>
 
